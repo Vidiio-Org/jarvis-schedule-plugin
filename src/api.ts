@@ -11,6 +11,8 @@ import type { LogFn } from './store.js';
 import { ValidationError } from './validation.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
+/** How much of a refused body is still read and discarded so the client sees the 413 rather than a reset. */
+const DRAIN_LIMIT_BYTES = 64 * 1024 * 1024;
 const ALLOWED_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -137,16 +139,26 @@ export class ApiServer {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let size = 0;
+      let tooLarge = false;
+      const refuse = (): void => {
+        tooLarge = true;
+        chunks.length = 0;
+        reject(new HttpError(413, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${maxBytes} bytes.`));
+      };
+      // Refuse an announced oversize body up front; the 413 goes out while the rest is drained.
+      if (Number(req.headers['content-length']) > maxBytes) refuse();
       req.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > maxBytes) {
-          reject(new HttpError(413, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${maxBytes} bytes.`));
-          req.destroy();
+        if (tooLarge) {
+          // Keep reading (and discarding) so the 413 reaches the client instead of a connection reset.
+          if (size > DRAIN_LIMIT_BYTES) req.destroy();
           return;
         }
+        if (size > maxBytes) return refuse();
         chunks.push(chunk);
       });
       req.on('end', () => {
+        if (tooLarge) return;
         const raw = Buffer.concat(chunks).toString('utf8');
         if (raw.trim() === '') return resolve({});
         try {

@@ -172,10 +172,25 @@ describe('schedules', () => {
     expect(((await bad.json()) as { code: string }).code).toBe('VALIDATION_ERROR');
   });
 
-  it('413 for oversized bodies', async () => {
-    const res = await fetch(`${base}/api/schedules`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ briefing: 'x'.repeat(2 * 1024 * 1024) }) }).catch(() => null);
-    // the server may also just reset the connection after refusing the body
-    expect(res === null || res.status === 413).toBe(true);
+  it('413 PAYLOAD_TOO_LARGE (never a connection reset) for oversized bodies', async () => {
+    for (const size of [2 * 1024 * 1024, 8 * 1024 * 1024]) {
+      const res = await fetch(`${base}/api/schedules`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ briefing: 'x'.repeat(size) }) });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toMatchObject({ ok: false, code: 'PAYLOAD_TOO_LARGE' });
+    }
+    // the same connection pool keeps working afterwards
+    expect((await call('GET', '/api/health')).status).toBe(200);
+  });
+
+  it('413 also when the body arrives chunked (no Content-Length)', async () => {
+    const res = await fetch(`${base}/api/schedules`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: new ReadableStream({ start(c) { for (let i = 0; i < 4; i++) c.enqueue(new TextEncoder().encode('x'.repeat(512 * 1024))); c.close(); } }),
+      duplex: 'half'
+    } as RequestInit);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { code: string }).code).toBe('PAYLOAD_TOO_LARGE');
   });
 
   it('404 NOT_FOUND for unknown schedule / run / route, 405 for wrong method', async () => {
@@ -237,6 +252,12 @@ describe('static files', () => {
     expect(root.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(root.headers.get('x-content-type-options')).toBe('nosniff');
     expect(root.headers.get('content-security-policy')).toContain("default-src 'self'");
+    expect(root.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(root.headers.get('x-frame-options')).toBe('DENY');
+    // API responses (JSON, 401s) carry the same headers
+    for (const r of [await fetch(`${base}/api/health`, { headers: auth }), await fetch(`${base}/api/health`), await fetch(`${base}/nope.html`)]) {
+      expect(r.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    }
     expect((await fetch(`${base}/app.js`)).headers.get('content-type')).toBe('text/javascript; charset=utf-8');
     expect((await fetch(`${base}/styles.css`)).headers.get('content-type')).toBe('text/css; charset=utf-8');
   });

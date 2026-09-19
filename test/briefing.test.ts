@@ -245,9 +245,11 @@ describe('dispatch with the full briefing', () => {
   it('a bridge that rejects the model selection -> dispatch_failed with its message', async () => {
     h = await harness();
     const s = await h.service.createSchedule(scheduleBody({ squadId: 'squad-1', agentModels: { developer: 'gpt-5.6-luna' } }));
+    const squad = h.bridge.state.squads[0]; // the agent disappears from the squad after the schedule was saved
+    squad.agents = squad.agents.filter((a: { agentId: string }) => a.agentId !== 'developer');
     const { run } = await h.service.runNow(s.id);
     expect(run.status).toBe('dispatch_failed');
-    expect(run.error).toMatch(/does not match agent "developer"/);
+    expect(run.error).toMatch(/Unknown agent "developer"/);
   });
 
   it('a scheduled dispatch carries the options too', async () => {

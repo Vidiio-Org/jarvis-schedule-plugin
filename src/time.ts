@@ -51,6 +51,23 @@ export function isValidTimezone(timeZone: unknown): timeZone is string {
   }
 }
 
+/**
+ * The canonical spelling ICU knows for `timeZone` ("america/sao_paulo" → "America/Sao_Paulo"), or null when it
+ * is not a valid zone. Only the case is normalised: an alias ("US/Pacific", "Asia/Calcutta") keeps the name the
+ * user typed, so what is stored is never a different zone id than what was asked for.
+ */
+export function canonicalTimezone(timeZone: unknown): string | null {
+  if (typeof timeZone !== 'string') return null;
+  const typed = timeZone.trim();
+  if (!isValidTimezone(typed)) return null;
+  try {
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: typed }).resolvedOptions().timeZone;
+    return resolved.toLowerCase() === typed.toLowerCase() ? resolved : typed;
+  } catch {
+    return typed;
+  }
+}
+
 /** Wall-clock fields of the instant `ms` as seen in `timeZone`. */
 export function zonedParts(ms: number, timeZone: string): Zoned {
   const out: Record<string, number> = {};

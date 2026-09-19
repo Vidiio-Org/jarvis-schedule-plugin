@@ -4,7 +4,7 @@ import { buildBrief } from './autonomy.js';
 import { BridgeError } from './bridge.js';
 import { GRACE_MS, planSlots } from './scheduler.js';
 import { DAY_MS, dateString, nextSlotAfter, pad2, zonedParts } from './time.js';
-import { hasDeclaredStack, parseScheduleInput, ValidationError } from './validation.js';
+import { hasDeclaredStack, parseScheduleInput, validateAgainstCatalog, ValidationError } from './validation.js';
 export class NotFoundError extends Error {
 }
 const TERMINAL_MISSION = new Set(['done', 'aborted', 'failed']);
@@ -464,19 +464,38 @@ export class ScheduleService {
         await this.refreshCatalog();
         return this.store.listSchedules().map((s) => this.toSchedule(s));
     }
+    /**
+     * Checks workspace/squad/maestro/models against the live Bridge catalog (400 naming the field on a mismatch).
+     * With the Bridge unreachable the schedule is accepted and the returned warning says what was not checked.
+     */
+    async checkAgainstBridge(input) {
+        let catalog;
+        try {
+            catalog = await this.bridge.catalog();
+        }
+        catch (err) {
+            const why = err instanceof Error ? err.message : String(err);
+            this.log('warn', `Schedule "${input.name}" saved without validating against the Bridge: ${why}`);
+            return [`The ADE Bridge could not be reached (${why}), so workspaceId, squadId, maestro and models were not validated. They are checked again when the schedule dispatches.`];
+        }
+        this.workspaceNames = new Map(catalog.workspaces.map((w) => [w.id, w.name]));
+        this.catalogAt = this.now();
+        return validateAgainstCatalog(input, catalog);
+    }
     async createSchedule(body) {
         const input = parseScheduleInput(body, this.cfg.defaultTimezone);
+        const warnings = await this.checkAgainstBridge(input);
         const nowIso = new Date(this.now()).toISOString();
         const stored = { ...input, attachments: [], id: randomUUID(), createdAt: nowIso, updatedAt: nowIso, armedAt: this.now() };
         this.store.saveSchedule(stored);
-        await this.refreshCatalog();
-        return this.toSchedule(stored);
+        return { ...this.toSchedule(stored), warnings };
     }
     async updateSchedule(id, body) {
         const existing = this.store.getSchedule(id);
         if (!existing)
             throw new NotFoundError(`Schedule "${id}" does not exist.`);
         const input = parseScheduleInput(body, this.cfg.defaultTimezone);
+        const warnings = await this.checkAgainstBridge(input);
         const timingChanged = input.time !== existing.time ||
             input.timezone !== existing.timezone ||
             input.enabled !== existing.enabled ||
@@ -490,8 +509,7 @@ export class ScheduleService {
             armedAt: timingChanged ? this.now() : existing.armedAt
         };
         this.store.saveSchedule(stored);
-        await this.refreshCatalog();
-        return this.toSchedule(stored);
+        return { ...this.toSchedule(stored), warnings };
     }
     deleteSchedule(id) {
         if (!this.store.deleteSchedule(id))

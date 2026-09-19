@@ -264,11 +264,8 @@ export async function startFakeBridge(options = {}) {
             for (const [agentId, modelId] of Object.entries(body.agentModels)) {
               const agent = roster.find((a) => a.agentId === agentId);
               if (!agent) return err(res, 400, 'BAD_REQUEST', `Unknown agent "${agentId}" in "agentModels".`);
-              const model = models.find((m) => m.id === modelId);
-              if (!model) return err(res, 400, 'BAD_REQUEST', `Unknown model "${modelId}" in "agentModels".`);
-              if (model.adapter !== agent.adapter) {
-                return err(res, 400, 'BAD_REQUEST', `Model "${modelId}" (${model.adapter}) does not match agent "${agentId}" (${agent.adapter}).`);
-              }
+              if (!models.some((m) => m.id === modelId)) return err(res, 400, 'BAD_REQUEST', `Unknown model "${modelId}" in "agentModels".`);
+              // No adapter check: the model implies the CLI, so an agent may run a model from another CLI.
             }
             agentModels = body.agentModels;
           }

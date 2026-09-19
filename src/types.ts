@@ -69,6 +69,11 @@ export interface Schedule extends ScheduleInput {
   lastRunAt: string | null;
 }
 
+/** What POST/PUT /api/schedules answer: the schedule plus what could not be checked or will not take effect. */
+export interface SavedSchedule extends Schedule {
+  warnings: string[];
+}
+
 /** What is persisted for a schedule: the input plus bookkeeping the API hides. */
 export interface StoredAttachment extends AttachmentMeta {
   /** File name inside the schedule's attachment directory (server-generated, never client-supplied). */

@@ -81,7 +81,8 @@ describe('dispatch against the fake bridge', () => {
 
   it('records dispatch_failed when the Bridge rejects the mission (no retry)', async () => {
     h = await harness();
-    await h.service.createSchedule(scheduleBody({ workspaceId: 'nope' }));
+    await h.service.createSchedule(scheduleBody());
+    h.bridge.state.workspaces.splice(0, h.bridge.state.workspaces.length); // the workspace vanishes after the schedule was saved
     h.clock.now = NOON + 1000;
     await h.service.tick();
     const [run] = h.service.listRuns();

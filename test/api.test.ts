@@ -143,7 +143,7 @@ describe('schedules', () => {
     const s = created.json.data;
     expect(s).toMatchObject({ name: 'Daily report', workspaceName: 'Demo workspace', time: '12:00', timezone: 'UTC', squadId: null, enabled: true, lastRunAt: null });
     expect(Object.keys(s).sort()).toEqual(
-      ['agentModels', 'attachments', 'briefing', 'createdAt', 'days', 'e2e', 'enabled', 'id', 'lastRunAt', 'maestro', 'modelPool', 'name', 'nextRunAt', 'squadId', 'stack', 'time', 'timezone', 'updatedAt', 'workspaceId', 'workspaceName'].sort()
+      ['agentModels', 'attachments', 'briefing', 'createdAt', 'days', 'e2e', 'enabled', 'id', 'lastRunAt', 'maestro', 'modelPool', 'name', 'nextRunAt', 'squadId', 'stack', 'time', 'timezone', 'updatedAt', 'warnings', 'workspaceId', 'workspaceName'].sort()
     );
     expect(s).not.toHaveProperty('armedAt');
     expect(typeof s.nextRunAt).toBe('string');
@@ -221,7 +221,8 @@ describe('runs', () => {
   });
 
   it('manual run with a rejected mission returns the run as dispatch_failed (not 502)', async () => {
-    const s = (await call('POST', '/api/schedules', scheduleBody({ workspaceId: 'ghost' }))).json.data;
+    const s = (await call('POST', '/api/schedules', scheduleBody())).json.data;
+    h.bridge.state.workspaces.splice(0, h.bridge.state.workspaces.length); // the workspace vanishes after the schedule was saved
     const r = await call('POST', `/api/schedules/${s.id}/run`);
     expect(r.status).toBe(200);
     expect(r.json.data).toMatchObject({ status: 'dispatch_failed' });

@@ -1,4 +1,4 @@
-import { isValidTimezone, TIME_PATTERN } from './time.js';
+import { canonicalTimezone, TIME_PATTERN } from './time.js';
 import { STACK_LAYERS } from './types.js';
 export class ValidationError extends Error {
 }
@@ -115,12 +115,12 @@ export function parseScheduleInput(body, defaultTimezone) {
         }
         days = [...seen].sort((a, b) => a - b);
     }
-    let timezone = defaultTimezone;
+    let timezone = canonicalTimezone(defaultTimezone) ?? defaultTimezone;
     if (body.timezone !== undefined) {
-        if (typeof body.timezone !== 'string' || !isValidTimezone(body.timezone.trim())) {
+        const canonical = canonicalTimezone(body.timezone);
+        if (canonical === null)
             fail('timezone', 'must be a valid IANA timezone, e.g. "America/Sao_Paulo"');
-        }
-        timezone = body.timezone.trim();
+        timezone = canonical;
     }
     let squadId = null;
     if (body.squadId !== undefined && body.squadId !== null) {
@@ -183,4 +183,47 @@ export function parseScheduleInput(body, defaultTimezone) {
         modelPool,
         agentModels
     };
+}
+const shown = (id) => JSON.stringify(id.length > 60 ? `${id.slice(0, 60)}…` : id);
+/**
+ * Checks a parsed ScheduleInput against the Bridge catalog: workspace, squad, maestro, model pool and per-agent
+ * models must exist. Throws `ValidationError` naming the field. Returns non-blocking warnings (a maestro that is
+ * listed but not available, model selection on a Bridge that cannot take it).
+ *
+ * A model is allowed on any agent: the model implies the CLI, so the agent's own adapter is deliberately NOT compared.
+ */
+export function validateAgainstCatalog(input, catalog) {
+    const warnings = [];
+    if (!catalog.workspaces.some((w) => w.id === input.workspaceId)) {
+        fail('workspaceId', `unknown workspace ${shown(input.workspaceId)}; pick one from GET /api/workspaces`);
+    }
+    const squad = input.squadId === null ? null : catalog.squads.find((s) => s.id === input.squadId);
+    if (input.squadId !== null && !squad)
+        fail('squadId', `unknown squad ${shown(input.squadId)}; pick one from GET /api/catalog`);
+    if (input.maestro !== null) {
+        const maestro = catalog.maestros.find((m) => m.id === input.maestro);
+        if (!maestro)
+            fail('maestro', `unknown maestro ${shown(input.maestro)}; pick one from GET /api/catalog`);
+        if (!maestro.available)
+            warnings.push(`maestro ${shown(input.maestro)} is not available on this machine right now; the dispatch will fail until it is.`);
+    }
+    const wantsModels = input.modelPool.length > 0 || Object.keys(input.agentModels).length > 0;
+    if (wantsModels && catalog.models === undefined) {
+        warnings.push('The ADE Bridge does not support model selection (update Jarvis ADE): modelPool/agentModels are saved but will not be sent.');
+        return warnings;
+    }
+    const models = catalog.models ?? [];
+    for (const id of input.modelPool) {
+        if (!models.some((m) => m.id === id))
+            fail('modelPool', `unknown model ${shown(id)}; pick ids from catalog.models`);
+    }
+    for (const [agentId, modelId] of Object.entries(input.agentModels)) {
+        if (!squad)
+            fail('agentModels', 'needs a squad: choose squadId before assigning a model to an agent');
+        if (!squad.agents.some((a) => a.agentId === agentId))
+            fail('agentModels', `agent ${shown(agentId)} is not in squad ${shown(squad.id)}`);
+        if (!models.some((m) => m.id === modelId))
+            fail('agentModels', `unknown model ${shown(modelId)} for agent ${shown(agentId)}; pick ids from catalog.models`);
+    }
+    return warnings;
 }

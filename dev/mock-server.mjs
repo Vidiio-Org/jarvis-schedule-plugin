@@ -1,7 +1,7 @@
-// TODO(de-mock): dev-only mock of the plugin REST API. The integration card removes this
-// file (or keeps it out of the shipped package) once the real sidecar serves ui/.
+// Dev-only mock of the plugin REST API, for working on ui/ without a sidecar or a Bridge.
+// Not part of the shipped package (see "files" in package.json); the real sidecar serves ui/.
 //
-// Usage: node ui/dev/mock-server.mjs   (PORT=4871 TOKEN=dev-token by default)
+// Usage: node dev/mock-server.mjs   (PORT=4871 TOKEN=dev-token by default)
 // Extra dev hooks (no auth):
 //   POST /__mock/bridge  {"connected": false}   simulate the ADE Bridge being down
 //   POST /__mock/reset                          restore the fixtures
@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const UI_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'ui');
 const PORT = Number(process.env.PORT ?? 4871);
 const TOKEN = process.env.TOKEN ?? 'dev-token';
 const DEFAULT_TZ = 'America/Sao_Paulo';
@@ -422,8 +422,8 @@ async function readBody(req) {
 async function serveStatic(res, pathname) {
   const rel = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
   const file = resolve(join(UI_ROOT, rel));
-  // no path traversal, and dev/ is never served
-  if (!file.startsWith(UI_ROOT + sep) || file.startsWith(join(UI_ROOT, 'dev') + sep)) {
+  // no path traversal outside ui/
+  if (!file.startsWith(UI_ROOT + sep)) {
     res.writeHead(404).end('not found');
     return;
   }

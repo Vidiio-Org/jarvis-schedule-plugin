@@ -19,6 +19,7 @@ export function baseConfig(bridge: FakeBridge, overrides: Partial<Config> = {}):
   return {
     bridgeUrl: bridge.url,
     bridgeToken: bridge.token,
+    bridgeSource: 'settings',
     dashboardPort: 0,
     dashboardToken: TOKEN,
     defaultTimezone: 'UTC',

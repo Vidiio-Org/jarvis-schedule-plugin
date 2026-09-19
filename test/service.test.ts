@@ -357,3 +357,32 @@ describe('schedules & history', () => {
     expect(h.logs.some((l) => l.includes('junk.json'))).toBe(true);
   });
 });
+
+describe('live Bridge credential swap (ScheduleService.setBridge)', () => {
+  it('runs after the swap go to the new Bridge with the new token; the old Bridge is left alone; the ledger is intact', async () => {
+    const { startFakeBridge } = await import('./fake-bridge.mjs');
+    h = await harness();
+    const second = await startFakeBridge({ token: 'second-bridge-token' });
+    try {
+      await h.service.createSchedule(scheduleBody({ name: 'Swap me' }));
+      h.service.start();
+      await waitFor(() => h.bridge.state.sseClients.size === 1);
+      expect(h.service.config.bridgeSource).toBe('settings');
+
+      h.service.setBridge({ url: second.url, token: second.token, source: 'host' });
+      expect(h.service.config).toMatchObject({ bridgeUrl: second.url, bridgeToken: second.token, bridgeSource: 'host' });
+      await waitFor(() => second.state.sseClients.size === 1 && h.bridge.state.sseClients.size === 0);
+
+      const before = h.bridge.requests.length;
+      h.clock.now = NOON + 2_000;
+      await h.service.tick();
+      expect(second.missions).toHaveLength(1);
+      expect(h.bridge.missions).toHaveLength(0);
+      expect(second.requests.every((r) => r.authorized)).toBe(true);
+      expect(h.bridge.requests.length).toBe(before);
+      expect(await h.service.bridgeConnected()).toBe(true);
+    } finally {
+      await second.stop();
+    }
+  }, 20_000);
+});

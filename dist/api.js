@@ -220,6 +220,7 @@ export class ApiServer {
                 {
                     version: svc.version,
                     bridgeConnected: await svc.bridgeConnected(),
+                    bridgeSource: svc.config.bridgeSource,
                     now: new Date().toISOString(),
                     timezone: svc.config.defaultTimezone
                 }

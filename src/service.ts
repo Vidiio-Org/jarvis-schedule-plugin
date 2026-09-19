@@ -8,6 +8,7 @@ import type { LogFn, Store } from './store.js';
 import { DAY_MS, dateString, nextSlotAfter, pad2, zonedParts } from './time.js';
 import type {
   BridgeMission,
+  BridgeSource,
   BridgeTask,
   Config,
   AttachmentMeta,
@@ -70,7 +71,7 @@ function toRun(stored: StoredRun): Run {
 }
 
 export class ScheduleService {
-  private readonly cfg: Config;
+  private cfg: Config;
   private readonly store: Store;
   private readonly files: AttachmentStore;
   private readonly bridge: BridgeClient;
@@ -102,6 +103,17 @@ export class ScheduleService {
 
   get config(): Config {
     return this.cfg;
+  }
+
+  /**
+   * Swaps the Bridge credentials live (repeated hello: ADE restarted the Bridge or rotated its token). Nothing else
+   * is touched — schedules, the run ledger and the timers keep going; the event stream reconnects by itself.
+   */
+  setBridge(creds: { url: string; token: string; source: BridgeSource }): void {
+    this.cfg = { ...this.cfg, bridgeUrl: creds.url, bridgeToken: creds.token, bridgeSource: creds.source };
+    this.bridge.setCredentials({ baseUrl: creds.url, token: creds.token });
+    this.probe = { at: 0, connected: false };
+    this.catalogAt = 0;
   }
 
   /* ── lifecycle ── */

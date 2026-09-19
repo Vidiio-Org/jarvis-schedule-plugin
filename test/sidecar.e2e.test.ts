@@ -287,3 +287,101 @@ describe('sidecar embedded in ADE (hello.host / ready.http)', () => {
   }, 30_000);
 });
 
+
+describe('sidecar with the Bridge provided by the ADE host (hello.host.bridge)', () => {
+  const get = (port: number, path: string) => fetch(`http://127.0.0.1:${port}${path}`, { headers: { Authorization: `Bearer ${VIEW_TOKEN}` } }).then(async (r) => ({ status: r.status, data: ((await r.json()) as any).data }));
+  const hello = (sc: Sidecar, id: string, over: Record<string, unknown>) =>
+    sc.send({ v: 1, id, type: 'hello', at: Date.now(), settings: { dashboardPort: '0', defaultTimezone: 'UTC' }, ...over });
+
+  it('uses host.bridge with NO bridge settings at all, ignoring wrong manual settings; health says automatic', async () => {
+    const sc = launch({ ADE_PLUGIN_DATA_DIR: data.dir });
+    running.push(sc);
+    hello(sc, '1', {
+      settings: { bridgeUrl: 'http://127.0.0.1:1', bridgeToken: 'wrong-token', dashboardPort: '0', defaultTimezone: 'UTC' },
+      host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: bridge.url, token: bridge.token } }
+    });
+    await waitFor(() => sc.messages.some((m) => m.type === 'ready' || m.type === 'error'), 8000);
+    expect(sc.messages.some((m) => m.type === 'error')).toBe(false);
+    const port = sc.messages.find((m) => m.type === 'ready')!.http.port as number;
+    const health = await get(port, '/api/health');
+    expect(health.data).toMatchObject({ bridgeConnected: true, bridgeSource: 'host' });
+    expect((await get(port, '/api/workspaces')).status).toBe(200);
+    expect(bridge.requests.some((r) => r.authorized)).toBe(true);
+    expect(bridge.requests.every((r) => r.authorized)).toBe(true);
+  }, 20_000);
+
+  it('starts with only host.bridge (no settings token) and never logs the bridge token', async () => {
+    const sc = launch({ ADE_PLUGIN_DATA_DIR: data.dir });
+    running.push(sc);
+    hello(sc, '1', { host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: bridge.url, token: bridge.token } } });
+    await waitFor(() => sc.messages.some((m) => m.type === 'ready'), 8000);
+    // exercise the paths that log: a malformed hello carrying the token, a repeated identical hello, an unreachable-catalog request
+    sc.proc.stdin.write(`{"type":"hello","host":{"bridge":{"url":"${bridge.url}","token":"${bridge.token}"}}\n`);
+    hello(sc, '2', { host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: bridge.url, token: bridge.token } } });
+    await waitFor(() => sc.messages.some((m) => m.type === 'log' && /Ignoring repeated hello/.test(m.message)), 5000);
+    sc.send({ v: 1, id: '3', type: 'shutdown', at: Date.now() });
+    await sc.exit;
+    const everything = JSON.stringify(sc.messages) + sc.stderr.join('');
+    expect(everything).not.toContain(bridge.token);
+    expect(everything).toContain('provided by the ADE host (automatic)');
+  }, 20_000);
+
+  it('a repeated hello with new host.bridge credentials swaps them live (REST and SSE), keeping everything else', async () => {
+    const second = await startFakeBridge({ token: 'rotated-bridge-token' });
+    try {
+      const sc = launch({ ADE_PLUGIN_DATA_DIR: data.dir });
+      running.push(sc);
+      hello(sc, '1', { host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: bridge.url, token: bridge.token } } });
+      await waitFor(() => sc.messages.some((m) => m.type === 'ready'), 8000);
+      const port = sc.messages.find((m) => m.type === 'ready')!.http.port as number;
+      expect((await get(port, '/api/health')).data).toMatchObject({ bridgeConnected: true });
+      await waitFor(() => bridge.state.sseClients.size === 1, 5000);
+      const before = bridge.requests.length;
+
+      hello(sc, '2', { host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: second.url, token: second.token } } });
+      await waitFor(() => sc.messages.some((m) => m.type === 'log' && /Bridge credentials updated/.test(m.message)), 5000);
+
+      // the event stream moved to the new Bridge; the old one lost its subscriber
+      await waitFor(() => second.state.sseClients.size === 1 && bridge.state.sseClients.size === 0, 5000);
+      expect(second.requests.every((r) => r.authorized)).toBe(true);
+      const health = await waitFor(async () => {
+        const h = await get(port, '/api/health');
+        return h.data.bridgeConnected ? h : null;
+      });
+      expect(health!.data.bridgeSource).toBe('host');
+      expect(second.requests.some((r) => r.path === '/api/health' && r.authorized)).toBe(true);
+      // nothing further went to the old Bridge (health/catalog/…), and the plugin did not restart
+      expect(bridge.requests.slice(before).filter((r) => r.path !== '/api/events')).toHaveLength(0);
+      expect(sc.messages.filter((m) => m.type === 'ready')).toHaveLength(1);
+      expect(JSON.stringify(sc.messages) + sc.stderr.join('')).not.toContain('rotated-bridge-token');
+    } finally {
+      await second.stop();
+    }
+  }, 30_000);
+
+  it('a malformed host.bridge falls back to the manual settings with a warning (nothing echoed)', async () => {
+    const sc = launch({ ADE_PLUGIN_DATA_DIR: data.dir });
+    running.push(sc);
+    hello(sc, '1', {
+      settings: { bridgeUrl: bridge.url, bridgeToken: bridge.token, dashboardPort: '0', defaultTimezone: 'UTC' },
+      host: { views: true, viewToken: VIEW_TOKEN, bridge: { url: 'ftp://nope', token: 'LEAKY-SECRET' } }
+    });
+    await waitFor(() => sc.messages.some((m) => m.type === 'ready' || m.type === 'error'), 8000);
+    const port = sc.messages.find((m) => m.type === 'ready')!.http.port as number;
+    expect(sc.messages.some((m) => m.type === 'log' && m.level === 'warn' && /host\.bridge is malformed/.test(m.message))).toBe(true);
+    expect(JSON.stringify(sc.messages)).not.toContain('LEAKY-SECRET');
+    expect((await get(port, '/api/health')).data).toMatchObject({ bridgeConnected: true, bridgeSource: 'settings' });
+    // a repeated hello with a malformed bridge keeps the current credentials
+    hello(sc, '2', { settings: { bridgeToken: 'other' }, host: { views: true, viewToken: VIEW_TOKEN, bridge: 'garbage' } });
+    await waitFor(() => sc.messages.some((m) => m.type === 'log' && /malformed; keeping/.test(m.message)), 5000);
+    expect((await get(port, '/api/health')).data.bridgeConnected).toBe(true);
+  }, 20_000);
+
+  it('without host.bridge and without a token the plugin reports the requirement (older ADE fallback unchanged)', async () => {
+    const sc = launch({ ADE_PLUGIN_DATA_DIR: data.dir });
+    running.push(sc);
+    hello(sc, '1', { host: { views: true, viewToken: VIEW_TOKEN } });
+    await waitFor(() => sc.messages.some((m) => m.type === 'error'), 5000);
+    expect(sc.messages.find((m) => m.type === 'error')!.message).toMatch(/bridgeToken.*ADE_BRIDGE=1/);
+  }, 15_000);
+});

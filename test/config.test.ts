@@ -17,6 +17,18 @@ describe('resolveConfig', () => {
     });
   });
 
+  it('host.bridge overrides the settings entirely (even an invalid bridgeUrl) and needs no bridgeToken', () => {
+    const { config } = resolveConfig({ bridgeUrl: 'ftp://ignored', bridgeToken: 'settings-token' }, { url: 'http://127.0.0.1:5123/', token: 'host-token' });
+    expect(config).toMatchObject({ bridgeUrl: 'http://127.0.0.1:5123', bridgeToken: 'host-token', bridgeSource: 'host' });
+    expect(resolveConfig({}, { url: 'http://127.0.0.1:5123', token: 'host-token' }).config.bridgeSource).toBe('host');
+  });
+
+  it('without host.bridge the settings are the fallback (source "settings")', () => {
+    expect(resolveConfig(good).config).toMatchObject({ bridgeToken: 'bt', bridgeSource: 'settings' });
+    expect(resolveConfig(good, null).config.bridgeSource).toBe('settings');
+    expect(() => resolveConfig({})).toThrow(/bridgeToken.*ADE_BRIDGE=1/);
+  });
+
   it('requires bridgeToken; dashboardToken is optional (the host authenticates the embedded view)', () => {
     expect(() => resolveConfig({ dashboardToken: 'a-long-enough-token' })).toThrow(ConfigError);
     expect(resolveConfig({ bridgeToken: 'bt' }).config.dashboardToken).toBeNull();

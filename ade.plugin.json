@@ -15,14 +15,14 @@
         "type": "string",
         "required": false,
         "default": "http://127.0.0.1:4820",
-        "description": "Base URL of the local ADE SaaS Bridge, e.g. http://127.0.0.1:4820"
+        "description": "Only for older ADE versions (ignored when ADE provides the Bridge automatically). Base URL of the local ADE SaaS Bridge, e.g. http://127.0.0.1:4820"
       },
       {
         "key": "bridgeToken",
         "label": "ADE SaaS Bridge token",
         "type": "secret",
-        "required": true,
-        "description": "Bearer token accepted by the ADE SaaS Bridge (printed by the ADE app on first run, or set explicitly)"
+        "required": false,
+        "description": "Only for older ADE versions. ADE 0.4.0+ starts the Bridge for this plugin and hands over its address and token automatically, so leave this empty. Older ADE needs ADE_BRIDGE=1 and the Bridge token here."
       },
       {
         "key": "dashboardPort",
@@ -79,6 +79,7 @@
         "description": "Scheduler + local dashboard that dispatches recurring missions through the ADE SaaS Bridge",
         "command": "node",
         "args": ["dist/index.js"],
+        "bridge": true,
         "events": ["mission.finished"]
       }
     ]

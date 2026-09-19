@@ -33,9 +33,13 @@ export function loadSettings(helloSettings, env = process.env) {
 function trimmed(v) {
     return (v ?? '').trim();
 }
-/** Validates settings. Throws `ConfigError` for anything that must stop the plugin from starting. */
-export function resolveConfig(settings) {
-    const warnings = [];
+/**
+ * The host's Bridge (`hello.host.bridge`) wins over the `bridgeUrl`/`bridgeToken` settings, which are only the
+ * fallback for an ADE that cannot start the Bridge for the plugin. Throws `ConfigError` when neither exists.
+ */
+export function resolveBridge(settings, hostBridge) {
+    if (hostBridge)
+        return { bridgeUrl: hostBridge.url.replace(/\/+$/, ''), bridgeToken: hostBridge.token, bridgeSource: 'host' };
     const bridgeUrl = (trimmed(settings.bridgeUrl) || DEFAULT_BRIDGE_URL).replace(/\/+$/, '');
     try {
         const u = new URL(bridgeUrl);
@@ -46,8 +50,15 @@ export function resolveConfig(settings) {
         throw new ConfigError(`"bridgeUrl" is not a valid http(s) URL: "${bridgeUrl}".`);
     }
     const bridgeToken = trimmed(settings.bridgeToken);
-    if (bridgeToken === '')
-        throw new ConfigError('Missing required setting "bridgeToken".');
+    if (bridgeToken === '') {
+        throw new ConfigError('Missing required setting "bridgeToken" (the ADE host did not provide the Bridge in hello.host.bridge — older ADE needs ADE_BRIDGE=1 and the Bridge token).');
+    }
+    return { bridgeUrl, bridgeToken, bridgeSource: 'settings' };
+}
+/** Validates settings. Throws `ConfigError` for anything that must stop the plugin from starting. */
+export function resolveConfig(settings, hostBridge = null) {
+    const warnings = [];
+    const { bridgeUrl, bridgeToken, bridgeSource } = resolveBridge(settings, hostBridge);
     // Optional: inside ADE the host authenticates the embedded view; the token is only for opening the dashboard in a browser.
     const dashboardTokenRaw = trimmed(settings.dashboardToken);
     if (dashboardTokenRaw !== '' && dashboardTokenRaw.length < MIN_DASHBOARD_TOKEN_LENGTH) {
@@ -80,7 +91,7 @@ export function resolveConfig(settings) {
     const enabledRaw = trimmed(settings.enabled).toLowerCase();
     const enabled = !(enabledRaw === 'false' || enabledRaw === '0' || enabledRaw === 'no' || enabledRaw === 'off');
     return {
-        config: { bridgeUrl, bridgeToken, dashboardPort, dashboardToken, defaultTimezone, historyRetentionDays, enabled },
+        config: { bridgeUrl, bridgeToken, bridgeSource, dashboardPort, dashboardToken, defaultTimezone, historyRetentionDays, enabled },
         warnings
     };
 }

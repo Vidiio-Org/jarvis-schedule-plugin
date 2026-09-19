@@ -162,9 +162,13 @@ export interface BridgeTask {
   [key: string]: unknown;
 }
 
+/** Where the Bridge credentials came from: the ADE host (automatic) or the plugin settings (older ADE, manual). */
+export type BridgeSource = 'host' | 'settings';
+
 export interface Config {
   bridgeUrl: string;
   bridgeToken: string;
+  bridgeSource: BridgeSource;
   dashboardPort: number;
   /** Null when not configured (optional since the embedded view is authenticated by the host). */
   dashboardToken: string | null;

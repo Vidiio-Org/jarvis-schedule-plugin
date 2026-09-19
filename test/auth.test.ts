@@ -8,19 +8,38 @@ const HEX64 = 'ab'.repeat(32);
 
 describe('parseHostHello', () => {
   it('reads the viewToken when host.views is true and the token is 64 hex', () => {
-    expect(parseHostHello({ views: true, viewToken: HEX64 })).toEqual({ viewToken: HEX64, invalid: false });
+    expect(parseHostHello({ views: true, viewToken: HEX64 })).toEqual({ viewToken: HEX64, invalid: false, bridge: null, bridgeInvalid: false });
     expect(parseHostHello({ views: true, viewToken: HEX64.toUpperCase() }).viewToken).toBe(HEX64.toUpperCase());
   });
 
   it('treats an absent host (older ADE) as no token, not as an error', () => {
     for (const host of [undefined, null, 'x', 42, [], {}, { views: false, viewToken: HEX64 }, { viewToken: HEX64 }]) {
-      expect(parseHostHello(host)).toEqual({ viewToken: null, invalid: false });
+      expect(parseHostHello(host)).toEqual({ viewToken: null, invalid: false, bridge: null, bridgeInvalid: false });
     }
   });
 
   it('flags a malformed token without returning it', () => {
     for (const viewToken of [undefined, '', 'short', 'zz'.repeat(32), `${HEX64}0`, HEX64.slice(1), 123, null]) {
-      expect(parseHostHello({ views: true, viewToken })).toEqual({ viewToken: null, invalid: true });
+      expect(parseHostHello({ views: true, viewToken })).toEqual({ viewToken: null, invalid: true, bridge: null, bridgeInvalid: false });
+    }
+  });
+});
+
+describe('parseHostHello — host.bridge', () => {
+  it('reads {url, token}, trimming and dropping trailing slashes, with or without host.views', () => {
+    expect(parseHostHello({ bridge: { url: ' http://127.0.0.1:5123/ ', token: ' tok ' } }).bridge).toEqual({ url: 'http://127.0.0.1:5123', token: 'tok' });
+    const both = parseHostHello({ views: true, viewToken: HEX64, bridge: { url: 'http://127.0.0.1:1', token: 't' } });
+    expect(both).toEqual({ viewToken: HEX64, invalid: false, bridge: { url: 'http://127.0.0.1:1', token: 't' }, bridgeInvalid: false });
+  });
+
+  it('absent host.bridge (older ADE) is not an error', () => {
+    expect(parseHostHello({ views: true, viewToken: HEX64 })).toMatchObject({ bridge: null, bridgeInvalid: false });
+    expect(parseHostHello({ bridge: null })).toMatchObject({ bridge: null, bridgeInvalid: false });
+  });
+
+  it('flags an unusable bridge without returning it', () => {
+    for (const bridge of ['x', 5, [], {}, { url: 'http://x' }, { token: 't' }, { url: 'http://x', token: '  ' }, { url: 'ftp://x', token: 't' }, { url: 'nope', token: 't' }, { url: 1, token: 't' }]) {
+      expect(parseHostHello({ bridge })).toMatchObject({ bridge: null, bridgeInvalid: true });
     }
   });
 });

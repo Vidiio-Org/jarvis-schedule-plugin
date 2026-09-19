@@ -110,8 +110,12 @@ export interface BridgeClientOptions {
 }
 
 export class BridgeClient {
-  private readonly baseUrl: string;
-  private readonly token: string;
+  private baseUrl: string;
+  private token: string;
+  /** Live SSE subscriptions: restarted when the credentials change. */
+  /** Tokens replaced by `setCredentials`: still redacted from errors of requests that were in flight. */
+  private retired: string[] = [];
+  private readonly restarters = new Set<() => void>();
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
@@ -122,8 +126,21 @@ export class BridgeClient {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
+  /**
+   * Swaps the Bridge address/token live (ADE restarted the Bridge or rotated its token). In-flight requests finish
+   * with the old credentials; every later request and every SSE stream (reconnected now) uses the new ones.
+   */
+  setCredentials(creds: { baseUrl: string; token: string }): void {
+    const baseUrl = creds.baseUrl.replace(/\/+$/, '');
+    if (baseUrl === this.baseUrl && creds.token === this.token) return;
+    if (this.token && this.token !== creds.token) this.retired = [...this.retired, this.token].slice(-4);
+    this.baseUrl = baseUrl;
+    this.token = creds.token;
+    for (const restart of this.restarters) restart();
+  }
+
   private redact(text: string): string {
-    return this.token ? text.split(this.token).join('***') : text;
+    return [this.token, ...this.retired].filter(Boolean).reduce((out, t) => out.split(t).join('***'), text);
   }
 
   private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.timeoutMs): Promise<T> {
@@ -239,6 +256,8 @@ export class BridgeClient {
     let attempt = 0;
     let controller: AbortController | null = null;
     let retry: NodeJS.Timeout | null = null;
+    /** Bumped on every (re)start so a superseded connection stops quietly instead of scheduling its own retry. */
+    let generation = 0;
 
     const schedule = (): void => {
       if (closed) return;
@@ -250,12 +269,14 @@ export class BridgeClient {
 
     const connect = async (): Promise<void> => {
       if (closed) return;
+      const mine = ++generation;
       controller = new AbortController();
       try {
         const res = await this.fetchImpl(`${this.baseUrl}/api/events`, {
           headers: { Authorization: `Bearer ${this.token}`, Accept: 'text/event-stream' },
           signal: controller.signal
         });
+        if (mine !== generation) return;
         if (!res.ok || !res.body) throw new Error(`SSE connection failed with HTTP ${res.status}`);
         attempt = 0;
         onState?.(true);
@@ -275,17 +296,29 @@ export class BridgeClient {
             idx = buffer.indexOf('\n\n');
           }
         }
-        if (!closed) onState?.(false, 'SSE stream ended');
+        if (closed || mine !== generation) return;
+        onState?.(false, 'SSE stream ended');
       } catch (err) {
-        if (closed) return;
+        if (closed || mine !== generation) return;
         onState?.(false, this.redact(err instanceof Error ? err.message : String(err)));
       }
       schedule();
     };
 
+    const restart = (): void => {
+      if (closed) return;
+      if (retry) clearTimeout(retry);
+      retry = null;
+      controller?.abort();
+      attempt = 0;
+      void connect();
+    };
+    this.restarters.add(restart);
+
     void connect();
     return () => {
       closed = true;
+      this.restarters.delete(restart);
       if (retry) clearTimeout(retry);
       controller?.abort();
     };

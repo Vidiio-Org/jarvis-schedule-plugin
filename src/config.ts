@@ -1,6 +1,12 @@
 import { isValidTimezone } from './time.js';
 import type { Config } from './types.js';
 
+/** Bridge credentials handed over by the ADE host in `hello.host.bridge`. */
+export interface HostBridgeCreds {
+  url: string;
+  token: string;
+}
+
 export const DEFAULT_BRIDGE_URL = 'http://127.0.0.1:4820';
 export const DEFAULT_DASHBOARD_PORT = 4870;
 export const DEFAULT_TIMEZONE = 'America/Sao_Paulo';
@@ -51,10 +57,15 @@ export interface ResolvedConfig {
   warnings: string[];
 }
 
-/** Validates settings. Throws `ConfigError` for anything that must stop the plugin from starting. */
-export function resolveConfig(settings: RawSettings): ResolvedConfig {
-  const warnings: string[] = [];
-
+/**
+ * The host's Bridge (`hello.host.bridge`) wins over the `bridgeUrl`/`bridgeToken` settings, which are only the
+ * fallback for an ADE that cannot start the Bridge for the plugin. Throws `ConfigError` when neither exists.
+ */
+export function resolveBridge(
+  settings: RawSettings,
+  hostBridge: HostBridgeCreds | null
+): { bridgeUrl: string; bridgeToken: string; bridgeSource: 'host' | 'settings' } {
+  if (hostBridge) return { bridgeUrl: hostBridge.url.replace(/\/+$/, ''), bridgeToken: hostBridge.token, bridgeSource: 'host' };
   const bridgeUrl = (trimmed(settings.bridgeUrl) || DEFAULT_BRIDGE_URL).replace(/\/+$/, '');
   try {
     const u = new URL(bridgeUrl);
@@ -62,9 +73,18 @@ export function resolveConfig(settings: RawSettings): ResolvedConfig {
   } catch {
     throw new ConfigError(`"bridgeUrl" is not a valid http(s) URL: "${bridgeUrl}".`);
   }
-
   const bridgeToken = trimmed(settings.bridgeToken);
-  if (bridgeToken === '') throw new ConfigError('Missing required setting "bridgeToken".');
+  if (bridgeToken === '') {
+    throw new ConfigError('Missing required setting "bridgeToken" (the ADE host did not provide the Bridge in hello.host.bridge — older ADE needs ADE_BRIDGE=1 and the Bridge token).');
+  }
+  return { bridgeUrl, bridgeToken, bridgeSource: 'settings' };
+}
+
+/** Validates settings. Throws `ConfigError` for anything that must stop the plugin from starting. */
+export function resolveConfig(settings: RawSettings, hostBridge: HostBridgeCreds | null = null): ResolvedConfig {
+  const warnings: string[] = [];
+
+  const { bridgeUrl, bridgeToken, bridgeSource } = resolveBridge(settings, hostBridge);
 
   // Optional: inside ADE the host authenticates the embedded view; the token is only for opening the dashboard in a browser.
   const dashboardTokenRaw = trimmed(settings.dashboardToken);
@@ -104,7 +124,7 @@ export function resolveConfig(settings: RawSettings): ResolvedConfig {
   const enabled = !(enabledRaw === 'false' || enabledRaw === '0' || enabledRaw === 'no' || enabledRaw === 'off');
 
   return {
-    config: { bridgeUrl, bridgeToken, dashboardPort, dashboardToken, defaultTimezone, historyRetentionDays, enabled },
+    config: { bridgeUrl, bridgeToken, bridgeSource, dashboardPort, dashboardToken, defaultTimezone, historyRetentionDays, enabled },
     warnings
   };
 }

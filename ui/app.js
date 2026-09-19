@@ -416,7 +416,7 @@ function renderConn(unreachable = false) {
   const [dotState, text] = unreachable
     ? ['down', 'Plugin sem resposta']
     : state.health?.bridgeConnected
-      ? ['ok', 'Bridge conectado']
+      ? ['ok', state.health.bridgeSource === 'host' ? 'Conectado à Bridge do ADE (automático)' : 'Bridge conectado (manual)']
       : ['down', 'Bridge desconectado'];
   conn.dataset.state = dotState;
   conn.querySelector('.conn-text').textContent = text;

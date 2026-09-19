@@ -60,6 +60,16 @@ export class ScheduleService {
     get config() {
         return this.cfg;
     }
+    /**
+     * Swaps the Bridge credentials live (repeated hello: ADE restarted the Bridge or rotated its token). Nothing else
+     * is touched — schedules, the run ledger and the timers keep going; the event stream reconnects by itself.
+     */
+    setBridge(creds) {
+        this.cfg = { ...this.cfg, bridgeUrl: creds.url, bridgeToken: creds.token, bridgeSource: creds.source };
+        this.bridge.setCredentials({ baseUrl: creds.url, token: creds.token });
+        this.probe = { at: 0, connected: false };
+        this.catalogAt = 0;
+    }
     /* ── lifecycle ── */
     start(tickMs = 20_000, pollMs = 30_000) {
         this.recoverInterruptedRuns();

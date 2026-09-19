@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { ApiServer } from './api.js';
 import { parseHostHello, resolveApiTokens } from './auth.js';
 import { BridgeClient } from './bridge.js';
-import { ConfigError, loadSettings, resolveConfig } from './config.js';
+import { ConfigError, loadSettings, resolveBridge, resolveConfig } from './config.js';
 import { Emitter, parseEventLine, type HostEvent } from './protocol.js';
 import { ScheduleService } from './service.js';
 import { Store, type LogFn } from './store.js';
@@ -24,6 +24,8 @@ const log: LogFn = (level, message) => emitter.log(level, message);
 let service: ScheduleService | null = null;
 let api: ApiServer | null = null;
 let started = false;
+/** Last Bridge credentials in use — a repeated hello only swaps them when they actually changed. */
+let currentBridge: { url: string; token: string; source: 'host' | 'settings' } | null = null;
 let shuttingDown = false;
 
 function readVersion(): string {
@@ -35,17 +37,48 @@ function readVersion(): string {
   }
 }
 
+/** A hello while running: only the Bridge credentials can change live (restart / token rotation). */
+function handleRepeatedHello(event: HostEvent): void {
+  const host = parseHostHello(event.host);
+  if (host.bridgeInvalid) {
+    log('warn', 'Ignoring repeated hello: hello.host.bridge is malformed; keeping the current Bridge credentials.');
+    return;
+  }
+  const { settings } = loadSettings(event.settings);
+  let next;
+  try {
+    next = resolveBridge(settings, host.bridge);
+  } catch {
+    log('info', 'Ignoring repeated hello: already running');
+    return;
+  }
+  const cur = currentBridge;
+  if (!service || (cur && cur.url === next.bridgeUrl && cur.token === next.bridgeToken && cur.source === next.bridgeSource)) {
+    log('info', 'Ignoring repeated hello: already running');
+    return;
+  }
+  currentBridge = { url: next.bridgeUrl, token: next.bridgeToken, source: next.bridgeSource };
+  service.setBridge(currentBridge);
+  log('info', `Bridge credentials updated (${describeBridge(next.bridgeSource, next.bridgeUrl)})`);
+}
+
+function describeBridge(source: 'host' | 'settings', url: string): string {
+  return source === 'host' ? `provided by the ADE host (automatic) at ${url}` : `manual settings, ${url}`;
+}
+
 async function handleHello(event: HostEvent): Promise<void> {
   if (started) {
-    log('info', 'Ignoring repeated hello: already running');
+    handleRepeatedHello(event);
     return;
   }
   const { settings, warning } = loadSettings(event.settings);
   if (warning) log('warn', warning);
+  const host = parseHostHello(event.host);
+  if (host.bridgeInvalid) log('warn', 'hello.host.bridge is malformed; falling back to the bridgeUrl/bridgeToken settings.');
 
   let resolved;
   try {
-    resolved = resolveConfig(settings);
+    resolved = resolveConfig(settings, host.bridge);
   } catch (err) {
     const message = err instanceof ConfigError ? err.message : String(err);
     log('error', `Configuration invalid, plugin will not start: ${message}`);
@@ -54,10 +87,10 @@ async function handleHello(event: HostEvent): Promise<void> {
   }
   for (const w of resolved.warnings) log('warn', w);
   const { config } = resolved;
-  const host = parseHostHello(event.host);
   if (host.invalid) log('warn', 'hello.host.viewToken is malformed; the embedded view will not be authenticated.');
   const { tokens, fallbackToken } = resolveApiTokens({ dashboardToken: config.dashboardToken, viewToken: host.viewToken });
   started = true;
+  currentBridge = { url: config.bridgeUrl, token: config.bridgeToken, source: config.bridgeSource };
 
   const dataDir = process.env.ADE_PLUGIN_DATA_DIR?.trim() || join(process.cwd(), '.data');
   if (!process.env.ADE_PLUGIN_DATA_DIR?.trim()) log('warn', `ADE_PLUGIN_DATA_DIR is not set; using "${dataDir}"`);
@@ -75,6 +108,7 @@ async function handleHello(event: HostEvent): Promise<void> {
     });
     const port = await api.start();
     service.start();
+    log('info', `Bridge: ${describeBridge(config.bridgeSource, config.bridgeUrl)}`);
     log('info', `Dashboard listening on http://127.0.0.1:${port}/ — scheduler ${config.enabled ? 'enabled' : 'DISABLED (master switch off)'}`);
     // Older-host fallback (no host.viewToken, no dashboardToken): a random per-launch token, shown in the local plugin log only.
     if (fallbackToken) log('info', `Painel: http://127.0.0.1:${port}/ — token ${fallbackToken}`);
@@ -82,6 +116,7 @@ async function handleHello(event: HostEvent): Promise<void> {
     emitter.send({ type: 'ready', name: 'Jarvis Schedule', http: { port } });
   } catch (err) {
     started = false;
+    currentBridge = null;
     service?.stop();
     const message = err instanceof Error ? err.message : String(err);
     log('error', `Failed to start: ${message}`);

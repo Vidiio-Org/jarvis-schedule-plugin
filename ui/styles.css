@@ -98,6 +98,11 @@ h2 {
   border-bottom: 1px solid var(--border);
 }
 
+/* Embedded in ADE (ade-plugin://): the host screen supplies the title, so the bar is just navigation + status. */
+.embedded .topbar {
+  padding: 0.5rem 1.25rem;
+}
+
 .brand {
   display: flex;
   align-items: center;

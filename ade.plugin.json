@@ -6,7 +6,7 @@
   "author": "Vidiio",
   "homepage": "https://github.com/Vidiio-Org/jarvis-schedule-plugin",
   "license": "MIT",
-  "adeVersion": "0.1.0",
+  "adeVersion": "0.4.0",
   "contributes": {
     "settings": [
       {
@@ -36,8 +36,8 @@
         "key": "dashboardToken",
         "label": "Dashboard token",
         "type": "secret",
-        "required": true,
-        "description": "Token you type on the dashboard login screen (at least 12 characters). It protects the dashboard, which can start real missions."
+        "required": false,
+        "description": "Optional. Only needed to open the dashboard in a regular browser (you type it on the login screen; at least 12 characters). Inside ADE the Agendamentos screen signs in by itself. It protects a dashboard that can start real missions."
       },
       {
         "key": "defaultTimezone",
@@ -62,6 +62,14 @@
         "required": false,
         "default": "true",
         "description": "Master switch. When off, no schedule fires automatically (the dashboard stays available and manual runs still work)."
+      }
+    ],
+    "views": [
+      {
+        "id": "dashboard",
+        "title": "Agendamentos",
+        "icon": "calendar-clock",
+        "integration": "scheduler"
       }
     ],
     "integrations": [

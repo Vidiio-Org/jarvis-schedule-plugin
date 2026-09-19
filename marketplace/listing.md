@@ -39,14 +39,14 @@ Missões recorrentes no Jarvis ADE, sem ninguém precisar apertar o botão. Voc�
 ## Como funciona
 
 - **100% autônomo.** Ao seu briefing, enviado sem alterações, o plugin acrescenta um bloco fixo dizendo ao maestro que ninguém vai responder: nunca chamar `ask_user`, decidir sozinho, não travar e encerrar a missão com `mission_finish` e um resumo completo.
-- **Painel web próprio, só local.** Agendamentos, histórico e detalhe de cada disparo em `http://127.0.0.1:4870`, protegido por um token que você define (mínimo de 12 caracteres). Nada é carregado de fora.
+- **Painel web próprio, só local.** Agendamentos, histórico e detalhe de cada disparo em `http://127.0.0.1:4870`, aberto pelo ícone **Agendamentos** dentro do ADE, sem login (num navegador, protegido por um token que você define, mínimo de 12 caracteres). Nada é carregado de fora.
 - **Nunca dispara duas vezes o mesmo horário**, mesmo se o ADE ou o plugin reiniciarem. Horário perdido (ADE fechado por mais de 15 minutos) fica registrado como **Perdido** em vez de disparar atrasado.
 - **Executar agora** para testar um agendamento sem esperar.
 - Fuso horário por agendamento, com tratamento de horário de verão.
 
 ## Instalação
 
-No ADE: **Marketplace de Plugins → Instalados → Importar plugin → URL git**, com `https://github.com/Vidiio-Org/jarvis-schedule-plugin`. Depois preencha `bridgeToken` (token da ADE SaaS Bridge) e `dashboardToken` (senha do painel) e salve.
+No ADE: **Marketplace de Plugins → Instalados → Importar plugin → URL git**, com `https://github.com/Vidiio-Org/jarvis-schedule-plugin`. Depois preencha `bridgeToken` (token da ADE SaaS Bridge) e salve; o painel abre pelo ícone **Agendamentos** do ADE, sem login. O `dashboardToken` (senha do painel) é opcional e só serve para abrir o painel num navegador.
 
 ## Requisitos
 

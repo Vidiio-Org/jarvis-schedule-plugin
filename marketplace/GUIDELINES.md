@@ -29,7 +29,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | `default` sempre string, inclusive em número/booleano | ✅ `"4870"`, `"90"`, `"true"` |
 | `contributes.integrations[]` com `id` kebab-case, `name`, `command` | ✅ `scheduler`, `node dist/index.js` |
 | `events`: `[]` ou sem filtro entrega **tudo** (não "nada") | ✅ o plugin não usa eventos de `board.*`/`mission.*` (acompanha as missões pela Bridge); o filtro foi reduzido a `["mission.finished"]` para não receber o `board.snapshot` de todas as missões à toa |
-| Campos obrigatórios (`required: true`) travam o início até serem preenchidos | ✅ `bridgeToken`, `dashboardToken`; sem eles a integração fica `missing_settings` |
+| Campos obrigatórios (`required: true`) travam o início até serem preenchidos | ✅ `bridgeToken`; sem ele a integração fica `missing_settings` (`dashboardToken` é opcional: só serve para abrir o painel num navegador) |
 | Segredos: tipo `secret`, nunca em log | ✅ `bridgeToken`, `dashboardToken` são `secret` e não são registrados |
 
 ## Pacote e repositório (`publicar`)
@@ -55,7 +55,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | Funcionar só com os arquivos publicados, em Node "puro" | ✅ TypeScript já compilado em `dist/`; só módulos nativos do Node e `fetch` global |
 | Estado só em `ADE_PLUGIN_DATA_DIR`, com escrita atômica; a pasta do plugin é descartável | ✅ `schedules.json`, `runs/<id>.json`, `attachments/` via arquivo temporário + `rename`; arquivo ilegível = ausente |
 | `hello` reenviado a cada reinício: reconciliar, não repetir | ✅ registro do disparo gravado antes de chamar a Bridge (trava); teste de ponta a ponta "reinício não redispara o horário" |
-| Logs `{type:'log'}`, ≤ 500 caracteres, sem segredos | ✅ `Emitter.log` corta em 500 caracteres (teste `protocol.test.ts`); tokens da Bridge são redigidos em `Bridge.redact` e o `dashboardToken` nunca é registrado |
+| Logs `{type:'log'}`, ≤ 500 caracteres, sem segredos | ✅ `Emitter.log` corta em 500 caracteres (teste `protocol.test.ts`); tokens da Bridge são redigidos em `Bridge.redact` e o `dashboardToken` e o `viewToken` do ADE nunca são registrados (única exceção documentada: o token aleatório por execução do fallback "Painel: …", sem `dashboardToken` e sem ADE com telas, só no log local) |
 | Sair em até 5 s no `shutdown` (e com stdin fechado) | ✅ `shutdown` e fechamento do stdin encerram o servidor e saem com código 0 (teste e2e) |
 | `ready` cedo; sem `process.exit(1)` em erro recuperável | ✅ `ready` logo após subir; exceções não tratadas só vão para o log |
 | Timeouts em toda E/S de rede | ✅ chamadas à Bridge com timeout |

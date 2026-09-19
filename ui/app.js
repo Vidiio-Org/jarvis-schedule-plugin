@@ -2,6 +2,8 @@
 // Every piece of API data reaches the DOM through textContent / text nodes / attributes;
 // innerHTML is never used.
 
+import { apiHeaders, isEmbedded } from './auth.js';
+
 const TOKEN_KEY = 'jarvis-schedule.dashboardToken';
 const HEALTH_INTERVAL_MS = 15_000;
 const RUNS_REFRESH_MS = 10_000;
@@ -47,8 +49,12 @@ const STACK_LAYERS = [
 ];
 const NO_MODEL_UPDATE_HINT = 'Seleção de modelos indisponível: atualize o Jarvis ADE para escolher modelos.';
 
+// Embedded in ADE (ade-plugin://): the host authenticates every request, so there is no login screen.
+const EMBEDDED = isEmbedded(location.protocol);
+if (EMBEDDED) document.documentElement.classList.add('embedded');
+
 const state = {
-  token: readToken(),
+  token: EMBEDDED ? '' : readToken(),
   health: null,
   shell: null, // { main, nav, conn }
   healthTimer: null,
@@ -185,10 +191,7 @@ async function api(method, path, body, { onUnauthorized = true } = {}) {
   try {
     res = await fetch(path, {
       method,
-      headers: {
-        Authorization: `Bearer ${state.token}`,
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-      },
+      headers: apiHeaders({ protocol: location.protocol, token: state.token, hasBody: body !== undefined }),
       body: body !== undefined ? JSON.stringify(body) : undefined,
       cache: 'no-store',
     });
@@ -294,6 +297,7 @@ const parseList = (text) => [...new Set(text.split(/[,\n]/).map((x) => x.trim())
 const app = document.getElementById('app');
 
 function logout(message = '') {
+  if (EMBEDDED) return mountSessionExpired(message);
   writeToken('');
   clearView();
   clearInterval(state.healthTimer);
@@ -302,7 +306,28 @@ function logout(message = '') {
   mountLogin(message);
 }
 
+/** Embedded 401: the host rotates its token when the plugin restarts and reloads the view; offer a manual reload meanwhile. */
+function mountSessionExpired(message = '') {
+  clearView();
+  clearInterval(state.healthTimer);
+  state.health = null;
+  state.shell = null;
+  app.replaceChildren(
+    h(
+      'div',
+      { class: 'login-wrap' },
+      h(
+        'div',
+        { class: 'card login' },
+        h('p', { role: 'alert' }, message || 'A sessão do painel expirou (o plugin foi reiniciado).'),
+        h('button', { class: 'btn btn-primary', type: 'button', onClick: () => location.reload() }, 'Recarregar'),
+      ),
+    ),
+  );
+}
+
 function mountLogin(message = '') {
+  if (EMBEDDED) return mountSessionExpired(message);
   const input = h('input', {
     id: 'token',
     type: 'password',
@@ -361,13 +386,14 @@ function mountShell() {
     h(
       'header',
       { class: 'topbar' },
-      h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, clockIcon()), 'Jarvis Agendador'),
+      // Embedded: the ADE screen header already names the plugin, so the brand and the logout button are dropped.
+      !EMBEDDED && h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, clockIcon()), 'Jarvis Agendador'),
       nav,
       h(
         'div',
         { class: 'topbar-end' },
         conn,
-        h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onClick: () => logout('') }, 'Sair'),
+        !EMBEDDED && h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onClick: () => logout('') }, 'Sair'),
       ),
     ),
     main,
@@ -1240,7 +1266,7 @@ async function runDetailView(main, ctx, id) {
 window.addEventListener('hashchange', route);
 
 async function boot() {
-  if (!state.token) return mountLogin('');
+  if (!EMBEDDED && !state.token) return mountLogin('');
   try {
     state.health = await api('GET', '/api/health');
     startShell();

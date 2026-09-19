@@ -71,7 +71,7 @@
         "description": "Scheduler + local dashboard that dispatches recurring missions through the ADE SaaS Bridge",
         "command": "node",
         "args": ["dist/index.js"],
-        "events": []
+        "events": ["mission.finished"]
       }
     ]
   }

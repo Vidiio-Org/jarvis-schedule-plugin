@@ -20,7 +20,7 @@ O plugin traz o seu próprio **painel web local** (agendamentos, histórico e de
 
 ## Instalação
 
-No ADE, abra **Marketplace → Importar plugin** e use a origem **git** com a URL:
+No ADE, abra **Marketplace de Plugins → Instalados → Importar plugin**, escolha a origem **URL git** e informe:
 
 ```
 https://github.com/Vidiio-Org/jarvis-schedule-plugin
@@ -49,7 +49,7 @@ O ADE define o token da Bridge de duas formas:
 
 Trate o token como uma credencial de acesso à máquina que roda o ADE.
 
-## Abrindo o painel
+## Como abrir o painel
 
 Com o plugin em execução, acesse:
 
@@ -196,7 +196,7 @@ src/                fonte em TypeScript
 ui/                 painel (HTML/JS/CSS puros, sem build)
 test/               testes e Bridge falsa
 scripts/            check-release.mjs (portão de publicação)
-marketplace/        material para a listagem no Marketplace
+marketplace/        material da listagem (listing.md, cover.png, screenshots/) e checklist das diretrizes; não vai no pacote npm
 ```
 
 O estado (agendamentos e histórico) fica em `ADE_PLUGIN_DATA_DIR`: `schedules.json` e `runs/<id>.json`, com escrita atômica (arquivo temporário + `rename`). Arquivos ilegíveis são tratados como ausentes, sem derrubar o plugin.
@@ -210,6 +210,8 @@ Servida em `127.0.0.1:<dashboardPort>`. Todas as rotas `/api/*` exigem `Authoriz
 **Validação contra o Bridge.** Ao criar ou editar (`POST`/`PUT /api/schedules`), com o Bridge acessível, o plugin confere `workspaceId`, `squadId`, `maestro`, `modelPool` e `agentModels` no `GET /api/catalog` do Bridge. Um valor que o Bridge não conhece resulta em `400 VALIDATION_ERROR` com o campo na mensagem (`workspaceId: unknown workspace "x"…`): o `maestro` precisa estar em `catalog.maestros`, cada id de `modelPool` e cada modelo de `agentModels` em `catalog.models`, e cada agente de `agentModels` precisa existir no squad escolhido (o que exige um `squadId`). O fornecedor do agente **não** é comparado com o do modelo.
 
 Sem Bridge, o agendamento é aceito sem essas conferências e a resposta traz `warnings` (lista de textos; sempre presente em `POST`/`PUT`, vazia quando não há avisos) dizendo o que não foi validado; os ids são conferidos de novo no disparo. `warnings` também avisa quando o maestro existe mas não está disponível agora, e quando o Bridge é antigo (sem `catalog.models`) e a seleção de modelos foi salva mas não será enviada. O painel mostra cada aviso ao salvar.
+
+Corpos JSON acima de 1 MiB recebem `413 PAYLOAD_TOO_LARGE` (o envio de anexo tem um limite maior, veja acima), sempre com a resposta em JSON e nunca com a conexão derrubada.
 
 Códigos de erro: `UNAUTHORIZED` (401), `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `BRIDGE_UNAVAILABLE` (502), além de `FORBIDDEN_HOST` (403), `METHOD_NOT_ALLOWED` (405) e `PAYLOAD_TOO_LARGE` (413).
 

@@ -1,0 +1,508 @@
+import { randomUUID } from 'node:crypto';
+
+import { buildBrief } from './autonomy.js';
+import { BridgeError, type BridgeClient, type MissionDetail } from './bridge.js';
+import { GRACE_MS, planSlots } from './scheduler.js';
+import type { LogFn, Store } from './store.js';
+import { DAY_MS, dateString, nextSlotAfter, pad2, zonedParts } from './time.js';
+import type {
+  BridgeMission,
+  BridgeTask,
+  Config,
+  Run,
+  RunResult,
+  RunStatus,
+  RunTask,
+  Schedule,
+  ScheduleInput,
+  StoredRun,
+  StoredSchedule
+} from './types.js';
+import { parseScheduleInput, ValidationError } from './validation.js';
+
+export class NotFoundError extends Error {}
+
+const TERMINAL_MISSION = new Set(['done', 'aborted', 'failed']);
+const TERMINAL_RUN = new Set<RunStatus>(['finished', 'failed', 'dispatch_failed', 'missed']);
+/** Polls in a row where the Bridge answers but does not know the mission before the run is failed. */
+const MAX_MISSING_POLLS = 3;
+/** A run still "running" this long after dispatch is failed (the maestro is not coming back). */
+const MAX_RUN_MS = 48 * 60 * 60 * 1000;
+const CATALOG_TTL_MS = 30_000;
+const BRIDGE_PROBE_TTL_MS = 5_000;
+const RAW_TEXT_CAP = 8_000;
+const RAW_CARD_CAP = 200;
+
+export interface ServiceOptions {
+  config: Config;
+  store: Store;
+  bridge: BridgeClient;
+  log: LogFn;
+  version: string;
+  now?: () => number;
+  /** Delay before retrying a dispatch that provably never reached the Bridge. */
+  retryDelayMs?: number;
+}
+
+export interface DispatchOutcome {
+  run: Run;
+  /** True when the Bridge could not be reached at all. */
+  bridgeUnavailable: boolean;
+}
+
+function cap(text: unknown): string | null {
+  if (typeof text !== 'string') return null;
+  return text.length > RAW_TEXT_CAP ? `${text.slice(0, RAW_TEXT_CAP)}… [truncated]` : text;
+}
+
+function toRun(stored: StoredRun): Run {
+  const { slotKey: _s, createdAtMs: _c, inflight: _i, retryAt: _r, missingPolls: _m, ...run } = stored;
+  return run;
+}
+
+export class ScheduleService {
+  private readonly cfg: Config;
+  private readonly store: Store;
+  private readonly bridge: BridgeClient;
+  private readonly log: LogFn;
+  readonly version: string;
+  private readonly now: () => number;
+  private readonly retryDelayMs: number;
+
+  private ticking = false;
+  private polling = false;
+  private finalizing = new Set<string>();
+  private workspaceNames = new Map<string, string>();
+  private catalogAt = 0;
+  private probe: { at: number; connected: boolean } = { at: 0, connected: false };
+  private lastPruneAt = 0;
+  private timers: NodeJS.Timeout[] = [];
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(opts: ServiceOptions) {
+    this.cfg = opts.config;
+    this.store = opts.store;
+    this.bridge = opts.bridge;
+    this.log = opts.log;
+    this.version = opts.version;
+    this.now = opts.now ?? Date.now;
+    this.retryDelayMs = opts.retryDelayMs ?? 30_000;
+  }
+
+  get config(): Config {
+    return this.cfg;
+  }
+
+  /* ── lifecycle ── */
+
+  start(tickMs = 20_000, pollMs = 30_000): void {
+    this.recoverInterruptedRuns();
+    this.unsubscribe = this.bridge.subscribe(
+      (evt) => {
+        if (evt.event === 'mission:update' && evt.data && typeof evt.data === 'object') {
+          void this.applyMissionUpdate(evt.data as BridgeMission).catch((e) => this.log('warn', `mission:update failed: ${String(e)}`));
+        }
+      },
+      (connected, error) => {
+        if (!connected && error) this.log('warn', `Bridge event stream: ${error}`);
+      }
+    );
+    const guard = (name: string, fn: () => Promise<void>) => () => {
+      void fn().catch((e) => this.log('error', `${name} failed: ${e instanceof Error ? e.stack ?? e.message : String(e)}`));
+    };
+    const tick = guard('tick', () => this.tick());
+    const poll = guard('poll', () => this.pollRuns());
+    tick();
+    poll();
+    this.timers.push(setInterval(tick, tickMs), setInterval(poll, pollMs));
+    for (const t of this.timers) t.unref?.();
+  }
+
+  stop(): void {
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  /** A run that was mid-dispatch when the process died is NEVER retried (the mission may exist). */
+  recoverInterruptedRuns(): void {
+    for (const run of this.store.listRuns()) {
+      if (run.status !== 'dispatching') continue;
+      if (run.inflight) {
+        run.inflight = false;
+        run.retryAt = null;
+        run.status = 'dispatch_failed';
+        run.error =
+          'The plugin stopped while this run was being dispatched, so it is unknown whether the mission was created. It was not retried, to avoid a duplicate mission — check the ADE missions list.';
+        this.store.saveRun(run);
+        this.log('warn', `Run ${run.id} was interrupted mid-dispatch; marked dispatch_failed (not retried)`);
+      } else if (run.retryAt === null) {
+        run.retryAt = this.now();
+        this.store.saveRun(run);
+      }
+    }
+  }
+
+  /* ── scheduler ── */
+
+  /** One scheduler pass: dispatch due slots, record missed ones, retry, prune. Safe to call repeatedly. */
+  async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const now = this.now();
+      if (this.cfg.enabled) {
+        const plan = planSlots(this.store.listSchedules(), {
+          now,
+          handledKeys: this.store.slotKeySet(),
+          lookbackMs: this.cfg.historyRetentionDays * DAY_MS
+        });
+        for (const { schedule, slot, action } of plan) {
+          if (this.store.hasSlot(slot.key)) continue;
+          const run = this.newRun(schedule, 'schedule', slot.key, slot.at);
+          if (action === 'missed') {
+            run.status = 'missed';
+            run.error = `The plugin was not running (or the Bridge was down) within ${Math.round(GRACE_MS / 60000)} minutes of the scheduled time, so this slot was not dispatched.`;
+            this.store.saveRun(run);
+            this.log('warn', `Schedule "${schedule.name}" missed slot ${slot.key}`);
+            continue;
+          }
+          // Write-ahead: the slot is recorded before the Bridge is called.
+          this.store.saveRun(run);
+          await this.attempt(run, schedule, slot.at + GRACE_MS);
+        }
+        for (const run of this.store.listRuns()) {
+          if (run.status !== 'dispatching' || run.inflight || run.retryAt === null || run.retryAt > now) continue;
+          const schedule = this.store.getSchedule(run.scheduleId);
+          if (!schedule || run.scheduledFor === null) {
+            run.status = 'dispatch_failed';
+            run.retryAt = null;
+            run.error = 'The schedule was deleted before the dispatch could be retried.';
+            this.store.saveRun(run);
+            continue;
+          }
+          await this.attempt(run, schedule, Date.parse(run.scheduledFor) + GRACE_MS);
+        }
+      }
+      if (now - this.lastPruneAt >= 60 * 60 * 1000) {
+        this.lastPruneAt = now;
+        this.prune();
+      }
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private newRun(schedule: StoredSchedule, trigger: 'schedule' | 'manual', slotKey: string | null, scheduledFor: number | null): StoredRun {
+    return {
+      id: randomUUID(),
+      scheduleId: schedule.id,
+      scheduleName: schedule.name,
+      trigger,
+      scheduledFor: scheduledFor === null ? null : new Date(scheduledFor).toISOString(),
+      dispatchedAt: null,
+      status: 'dispatching',
+      missionId: null,
+      missionName: null,
+      finishedAt: null,
+      error: null,
+      summary: null,
+      result: null,
+      slotKey,
+      createdAtMs: this.now(),
+      inflight: false,
+      retryAt: null,
+      missingPolls: 0
+    };
+  }
+
+  private missionName(schedule: StoredSchedule, at: number): string {
+    const p = zonedParts(at, schedule.timezone);
+    return `${schedule.name} · ${dateString(p)} ${pad2(p.hour)}:${pad2(p.minute)}`;
+  }
+
+  /**
+   * Sends the run's mission to the Bridge. `retryUntil` (scheduled runs only)
+   * is the end of the grace window: a failure that provably never reached the
+   * Bridge (connection refused, DNS) is retried until then; anything ambiguous
+   * (timeout, HTTP error, dropped connection) is final — never risk a duplicate.
+   */
+  private async attempt(run: StoredRun, schedule: StoredSchedule, retryUntil: number | null): Promise<DispatchOutcome> {
+    run.inflight = true;
+    run.retryAt = null;
+    this.store.saveRun(run);
+    const at = run.scheduledFor ? Date.parse(run.scheduledFor) : this.now();
+    try {
+      const mission = await this.bridge.createMission({
+        brief: buildBrief(schedule.briefing),
+        workspaceId: schedule.workspaceId,
+        name: this.missionName(schedule, at),
+        mode: schedule.squadId ? 'squad' : 'free',
+        ...(schedule.squadId ? { squadId: schedule.squadId } : {})
+      });
+      run.inflight = false;
+      run.status = 'running';
+      run.error = null;
+      run.missionId = mission.id;
+      run.missionName = typeof mission.name === 'string' ? mission.name : null;
+      run.dispatchedAt = new Date(this.now()).toISOString();
+      this.store.saveRun(run);
+      this.log('info', `Dispatched "${schedule.name}" as mission ${mission.id}`);
+      if (TERMINAL_MISSION.has(mission.status)) await this.applyMissionUpdate(mission);
+      return { run: toRun(run), bridgeUnavailable: false };
+    } catch (err) {
+      const be = err instanceof BridgeError ? err : null;
+      const message = be ? `${be.code}: ${be.message}` : err instanceof Error ? err.message : String(err);
+      run.inflight = false;
+      run.error = message;
+      if (be?.neverSent && retryUntil !== null && this.now() + this.retryDelayMs <= retryUntil) {
+        run.retryAt = this.now() + this.retryDelayMs;
+        this.log('warn', `Dispatch of "${schedule.name}" failed (${message}); retrying in ${this.retryDelayMs / 1000}s`);
+      } else {
+        run.status = 'dispatch_failed';
+        run.retryAt = null;
+        this.log('error', `Dispatch of "${schedule.name}" failed: ${message}`);
+      }
+      this.store.saveRun(run);
+      return { run: toRun(run), bridgeUnavailable: be?.unavailable === true };
+    }
+  }
+
+  /** Dispatches a schedule immediately (trigger 'manual'). Works even when the master switch is off. */
+  async runNow(scheduleId: string): Promise<DispatchOutcome> {
+    const schedule = this.store.getSchedule(scheduleId);
+    if (!schedule) throw new NotFoundError(`Schedule "${scheduleId}" does not exist.`);
+    const run = this.newRun(schedule, 'manual', null, null);
+    this.store.saveRun(run);
+    return this.attempt(run, schedule, null);
+  }
+
+  /* ── tracking ── */
+
+  /** Applies a Mission object (SSE `mission:update` payload or a poll result) to the run that owns it. */
+  async applyMissionUpdate(mission: BridgeMission, tasksHint?: BridgeTask[]): Promise<void> {
+    if (!mission || typeof mission.id !== 'string') return;
+    const run = this.store.listRuns().find((r) => r.missionId === mission.id);
+    if (!run || TERMINAL_RUN.has(run.status) || !TERMINAL_MISSION.has(mission.status)) return;
+    if (this.finalizing.has(run.id)) return;
+    this.finalizing.add(run.id);
+    try {
+      let detail: MissionDetail | null = null;
+      try {
+        detail = await this.bridge.getMission(mission.id);
+      } catch (err) {
+        this.log('warn', `Could not fetch detail of mission ${mission.id}: ${String(err)}`);
+      }
+      const finalMission = detail?.mission ?? mission;
+      const tasks = detail?.tasks ?? tasksHint ?? [];
+      const runTasks: RunTask[] = tasks.map((t) => ({
+        title: typeof t.title === 'string' ? t.title : '(untitled)',
+        status: typeof t.status === 'string' ? t.status : 'unknown',
+        result: typeof t.result === 'string' ? t.result : null
+      }));
+      const { brief: _brief, attachments: _att, ...missionRest } = finalMission as BridgeMission & { brief?: unknown; attachments?: unknown };
+      const columns = detail?.boardColumns ?? [];
+      const columnTitle = new Map(columns.map((c) => [String(c.id), String(c.title ?? '')]));
+      const result: RunResult = {
+        tasks: runTasks,
+        costUsd: typeof finalMission.usd === 'number' && Number.isFinite(finalMission.usd) ? finalMission.usd : null,
+        raw: {
+          mission: missionRest,
+          tasks,
+          boardCards: (detail?.boardCards ?? []).slice(0, RAW_CARD_CAP).map((c) => ({
+            id: c.id,
+            title: c.title,
+            type: c.type,
+            column: columnTitle.get(String(c.columnId)) ?? null,
+            description: cap(c.description),
+            docs: cap(c.docs)
+          }))
+        }
+      };
+      const summary = typeof finalMission.summary === 'string' ? finalMission.summary : null;
+      run.summary = summary;
+      run.result = result;
+      run.finishedAt = new Date(typeof finalMission.finishedAt === 'number' ? finalMission.finishedAt : this.now()).toISOString();
+      if (finalMission.status === 'done') {
+        run.status = 'finished';
+        run.error = null;
+      } else {
+        run.status = 'failed';
+        run.error = `Mission ${finalMission.status}${summary ? `: ${summary}` : ''}`;
+      }
+      run.retryAt = null;
+      this.store.saveRun(run);
+      this.log('info', `Run ${run.id} (${run.scheduleName}) ${run.status}`);
+    } finally {
+      this.finalizing.delete(run.id);
+    }
+  }
+
+  /** Safety net for missed SSE events and for runs still open across a plugin restart. */
+  async pollRuns(): Promise<void> {
+    if (this.polling) return;
+    const active = this.store.listRuns().filter((r) => r.status === 'running' && r.missionId);
+    if (active.length === 0) return;
+    this.polling = true;
+    try {
+      let list: { missions: BridgeMission[]; tasks: BridgeTask[] };
+      try {
+        list = await this.bridge.listMissions();
+      } catch {
+        return; // Bridge down: nothing to conclude, try again next poll
+      }
+      for (const run of active) {
+        const mission = list.missions.find((m) => m.id === run.missionId);
+        if (!mission) {
+          run.missingPolls += 1;
+          if (run.missingPolls >= MAX_MISSING_POLLS) {
+            run.status = 'failed';
+            run.finishedAt = new Date(this.now()).toISOString();
+            run.error = 'The ADE Bridge no longer lists this mission, so its outcome is unknown.';
+            this.store.saveRun(run);
+          } else {
+            this.store.saveRun(run);
+          }
+          continue;
+        }
+        if (run.missingPolls !== 0) {
+          run.missingPolls = 0;
+          this.store.saveRun(run);
+        }
+        if (TERMINAL_MISSION.has(mission.status)) {
+          await this.applyMissionUpdate(mission, list.tasks.filter((t) => t.missionId === mission.id));
+        } else if (run.dispatchedAt && this.now() - Date.parse(run.dispatchedAt) > MAX_RUN_MS) {
+          run.status = 'failed';
+          run.finishedAt = new Date(this.now()).toISOString();
+          run.error = `The mission was still "${mission.status}" ${MAX_RUN_MS / 3_600_000}h after dispatch; the plugin stopped tracking it.`;
+          this.store.saveRun(run);
+        }
+      }
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  prune(): void {
+    const cutoff = this.now() - this.cfg.historyRetentionDays * DAY_MS;
+    for (const run of this.store.listRuns()) {
+      if (!TERMINAL_RUN.has(run.status)) continue;
+      const ref = run.scheduledFor ? Date.parse(run.scheduledFor) : run.createdAtMs;
+      if (ref <= cutoff) this.store.deleteRun(run.id);
+    }
+  }
+
+  /* ── schedules CRUD ── */
+
+  private async refreshCatalog(): Promise<void> {
+    if (this.now() - this.catalogAt < CATALOG_TTL_MS) return;
+    this.catalogAt = this.now();
+    try {
+      const catalog = await this.bridge.catalog();
+      this.workspaceNames = new Map(catalog.workspaces.map((w) => [w.id, w.name]));
+    } catch {
+      // keep whatever names we had
+    }
+  }
+
+  private toSchedule(s: StoredSchedule): Schedule {
+    const now = this.now();
+    const next = s.enabled && this.cfg.enabled ? nextSlotAfter(s, Math.max(now, s.armedAt)) : null;
+    let last: string | null = null;
+    for (const r of this.store.listRuns()) {
+      if (r.scheduleId === s.id && r.dispatchedAt && (last === null || r.dispatchedAt > last)) last = r.dispatchedAt;
+    }
+    const { armedAt: _armed, ...input } = s;
+    return { ...input, workspaceName: this.workspaceNames.get(s.workspaceId) ?? null, nextRunAt: next ? new Date(next.at).toISOString() : null, lastRunAt: last };
+  }
+
+  async listSchedules(): Promise<Schedule[]> {
+    await this.refreshCatalog();
+    return this.store.listSchedules().map((s) => this.toSchedule(s));
+  }
+
+  async createSchedule(body: unknown): Promise<Schedule> {
+    const input = parseScheduleInput(body, this.cfg.defaultTimezone);
+    const nowIso = new Date(this.now()).toISOString();
+    const stored: StoredSchedule = { ...input, id: randomUUID(), createdAt: nowIso, updatedAt: nowIso, armedAt: this.now() };
+    this.store.saveSchedule(stored);
+    await this.refreshCatalog();
+    return this.toSchedule(stored);
+  }
+
+  async updateSchedule(id: string, body: unknown): Promise<Schedule> {
+    const existing = this.store.getSchedule(id);
+    if (!existing) throw new NotFoundError(`Schedule "${id}" does not exist.`);
+    const input = parseScheduleInput(body, this.cfg.defaultTimezone);
+    const timingChanged =
+      input.time !== existing.time ||
+      input.timezone !== existing.timezone ||
+      input.enabled !== existing.enabled ||
+      input.days.join(',') !== existing.days.join(',');
+    const stored: StoredSchedule = {
+      ...input,
+      id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date(this.now()).toISOString(),
+      armedAt: timingChanged ? this.now() : existing.armedAt
+    };
+    this.store.saveSchedule(stored);
+    await this.refreshCatalog();
+    return this.toSchedule(stored);
+  }
+
+  deleteSchedule(id: string): void {
+    if (!this.store.deleteSchedule(id)) throw new NotFoundError(`Schedule "${id}" does not exist.`);
+  }
+
+  /* ── runs ── */
+
+  listRuns(filter: { scheduleId?: string; limit?: number } = {}): Run[] {
+    const limit = filter.limit ?? 100;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new ValidationError('limit: must be an integer between 1 and 1000');
+    const sortTime = (r: StoredRun): number => (r.scheduledFor ? Date.parse(r.scheduledFor) : r.createdAtMs);
+    return this.store
+      .listRuns()
+      .filter((r) => !filter.scheduleId || r.scheduleId === filter.scheduleId)
+      .sort((a, b) => sortTime(b) - sortTime(a) || b.createdAtMs - a.createdAtMs)
+      .slice(0, limit)
+      .map(toRun);
+  }
+
+  getRun(id: string): Run {
+    const run = this.store.getRun(id);
+    if (!run) throw new NotFoundError(`Run "${id}" does not exist.`);
+    return toRun(run);
+  }
+
+  /* ── bridge passthrough for the dashboard ── */
+
+  async bridgeConnected(): Promise<boolean> {
+    if (this.now() - this.probe.at < BRIDGE_PROBE_TTL_MS) return this.probe.connected;
+    let connected = false;
+    try {
+      await this.bridge.health();
+      connected = true;
+    } catch {
+      connected = false;
+    }
+    this.probe = { at: this.now(), connected };
+    return connected;
+  }
+
+  async workspaces(): Promise<Array<{ id: string; name: string; path: string }>> {
+    const catalog = await this.bridge.catalog();
+    this.workspaceNames = new Map(catalog.workspaces.map((w) => [w.id, w.name]));
+    this.catalogAt = this.now();
+    return catalog.workspaces;
+  }
+
+  async squads(): Promise<Array<{ id: string; name: string }>> {
+    try {
+      return (await this.bridge.catalog()).squads;
+    } catch {
+      return [];
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "jarvis-schedule",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Jarvis ADE plugin that dispatches recurring scheduled missions, keeps a history of every dispatch and the data the maestro returned, and serves its own local dashboard",
+  "license": "MIT",
+  "author": "Vidiio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vidiio-Org/jarvis-schedule-plugin.git"
+  },
+  "keywords": [
+    "jarvis-ade-plugin",
+    "jarvis-ade",
+    "scheduler",
+    "missions"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "pretest": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "fake-bridge": "node test/fake-bridge.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

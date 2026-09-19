@@ -74,11 +74,32 @@ Em **Agendamentos → Novo agendamento**, preencha:
 | **Dias** | Caixas de seleção de domingo a sábado, com atalhos "Todos os dias" e "Dias úteis". |
 | **Fuso horário** | Nome IANA (ex.: `America/Sao_Paulo`). Começa com o `defaultTimezone`. |
 | **Squad** | Lista vinda do ADE. "Padrão" não escolhe squad: a missão usa o comportamento padrão do ADE. |
+| **Anexos** | Arquivos que o maestro recebe em toda execução (veja [Briefing completo](#briefing-completo-anexos-maestro-modelos-e2e-e-stack)). |
+| **Maestro** | Qual maestro conduz a missão. "Padrão do Jarvis ADE" não escolhe nenhum. |
+| **Modelos liberados / Modelo por agente** | Quais modelos o maestro pode usar e qual modelo cada agente do squad usa. |
+| **Stack** | Tecnologias já conhecidas do projeto (opcional). |
+| **Fluxo de teste E2E visível** | Liga o teste end-to-end em navegador visível. |
 | **Agendamento ativo** | Desativado, o agendamento fica "Pausado" e não dispara sozinho. |
 
 Erros de validação da API (por exemplo, fuso inexistente) aparecem no formulário. Na lista de agendamentos você também vê a próxima e a última execução de cada um, e pode **editar**, **excluir** (com confirmação; o histórico já gravado é mantido) ou **executar agora**.
 
 Criar ou alterar horário, dias, fuso ou o estado ativo de um agendamento nunca dispara horários que já passaram: só valem os horários a partir da alteração.
+
+## Briefing completo: anexos, maestro, modelos, E2E e stack
+
+O formulário oferece as mesmas opções de briefing que o app do Jarvis ADE oferece ao criar uma missão. Tudo é opcional e o que você não mexer segue o padrão do ADE.
+
+- **Anexos.** Escolha um ou mais arquivos (até **50 MB cada**, **200 MB** e **20 arquivos** por agendamento, os mesmos 50 MB por arquivo que o Bridge aceita). Os arquivos só são gravados quando você salva o agendamento e ficam em `ADE_PLUGIN_DATA_DIR/attachments/<id do agendamento>/`, com nome gerado pelo plugin (o nome que você vê é só um rótulo, sem caminho). O estacionamento de anexos do Bridge fica em memória e descarta ids antigos, então **a cada disparo o plugin reenvia os arquivos** ao Bridge e usa os ids novos. Se o envio falhar (por exemplo, arquivo grande demais para o Bridge), o disparo termina em **Falha no disparo** com o motivo, e nenhuma missão é aberta.
+- **Maestro.** Lista só os maestros que o Bridge diz estarem disponíveis nesta máquina. "Padrão do Jarvis ADE" não envia nenhum.
+- **Squad e modelo por agente.** Ao escolher um squad, cada agente aparece com um seletor de modelo, filtrado pelo fornecedor do agente (um agente Claude só oferece modelos Claude). "Padrão (X)" mantém o modelo do squad.
+- **Modelos liberados.** O conjunto de modelos que o maestro pode alocar. Sem seleção vale o pool do squad, ou qualquer modelo se o squad não restringir. Ao restringir o pool, um modelo de agente que ficou fora dele volta ao padrão, com aviso na tela.
+- **Fluxo de teste E2E visível.** Liga o teste end-to-end em navegador visível; precisa de um agente de QA (Reviewer) no squad.
+- **Stack.** Uma lista por camada (Backend, Frontend, Mobile, Infra, Outros), separada por vírgulas, igual ao `stack` que o Bridge aceita. O maestro continua analisando o projeto; isto só evita que ele adivinhe.
+- **Figma.** Não está disponível no agendamento: o Bridge só lista as fontes Figma do workspace ativo (ou de uma missão já criada), então o plugin não consegue oferecê-las para qualquer workspace antes de a missão existir.
+
+**Seleção de modelos exige um Jarvis ADE recente.** O plugin só mostra e só envia `modelPool`/`agentModels` quando o catálogo do Bridge traz `models`. Num Jarvis ADE mais antigo o painel esconde os seletores e mostra "Seleção de modelos indisponível: atualize o Jarvis ADE para escolher modelos.", e nenhum campo de modelo é enviado (se o agendamento já tinha modelos salvos, eles são mantidos, mas o disparo registra o aviso). Um Bridge novo recusa ids de modelo desconhecidos ou incompatíveis com o agente, e o disparo termina em **Falha no disparo** com a mensagem dele.
+
+No **detalhe do disparo**, a seção **Opções usadas** mostra exatamente o que foi enviado: squad, maestro, E2E, stack, modelos liberados, modelo por agente e os nomes dos anexos, mais os avisos (como modelos não enviados a um Bridge antigo). Agendamentos criados antes destas opções continuam funcionando, com os valores padrão.
 
 ## Reforço de autonomia
 
@@ -186,7 +207,7 @@ O estado (agendamentos e histórico) fica em `ADE_PLUGIN_DATA_DIR`: `schedules.j
 
 Servida em `127.0.0.1:<dashboardPort>`. Todas as rotas `/api/*` exigem `Authorization: Bearer <dashboardToken>` e respondem `{ok:true,data}` ou `{ok:false,code,message}`.
 
-`GET /api/health` · `GET /api/workspaces` · `GET /api/catalog` · `GET|POST /api/schedules` · `PUT|DELETE /api/schedules/:id` · `POST /api/schedules/:id/run` · `GET /api/runs?scheduleId=&limit=` · `GET /api/runs/:id`
+`GET /api/health` · `GET /api/workspaces` · `GET /api/catalog` (squads com agentes, maestros e, quando o Bridge tem, `models`) · `GET|POST /api/schedules` · `PUT|DELETE /api/schedules/:id` · `POST /api/schedules/:id/run` · `POST /api/schedules/:id/attachments` (JSON `{name, mime, data}` com `data` em base64) · `DELETE /api/schedules/:id/attachments/:attachmentId` · `GET /api/runs?scheduleId=&limit=` · `GET /api/runs/:id`
 
 Códigos de erro: `UNAUTHORIZED` (401), `VALIDATION_ERROR` (400), `NOT_FOUND` (404), `BRIDGE_UNAVAILABLE` (502), além de `FORBIDDEN_HOST` (403), `METHOD_NOT_ALLOWED` (405) e `PAYLOAD_TOO_LARGE` (413).
 

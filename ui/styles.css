@@ -540,6 +540,85 @@ fieldset legend {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* attachments, models and stack in the schedule form */
+fieldset .hint,
+.stack-sm .hint,
+.field p.hint {
+  display: block;
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+fieldset > p.hint {
+  margin-bottom: 0.7rem;
+}
+input[type='file'] {
+  color: var(--muted);
+  max-width: 100%;
+}
+input[type='file']::file-selector-button {
+  margin-right: 0.75rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.stack-sm {
+  display: grid;
+  gap: 1.15rem;
+}
+.file-list,
+.plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.file-list {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.file-list li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--base);
+}
+.file-list .file-name {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.day.chip span {
+  min-width: 0;
+}
+.agent-rows {
+  display: grid;
+  gap: 0.6rem;
+}
+.agent-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 2fr);
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.plain-list li + li {
+  margin-top: 0.15rem;
+}
+@media (max-width: 560px) {
+  .agent-row {
+    grid-template-columns: 1fr;
+  }
+}
 .day-presets {
   display: flex;
   gap: 0.4rem;

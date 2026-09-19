@@ -32,7 +32,20 @@ const TASK_STATUS = {
   skipped: { label: 'Ignorada', tone: 'neutral' },
 };
 
-const FIELD_KEYS = ['name', 'briefing', 'workspaceId', 'time', 'days', 'timezone', 'squadId', 'enabled'];
+const FIELD_KEYS = ['name', 'briefing', 'workspaceId', 'time', 'days', 'timezone', 'squadId', 'enabled', 'maestro', 'e2e', 'stack', 'modelPool', 'agentModels'];
+
+// Same limits the plugin enforces (and the ADE Bridge: 50 MB per file).
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
+const MAX_FILES = 20;
+const STACK_LAYERS = [
+  ['backend', 'Backend', 'NestJS, Postgres'],
+  ['frontend', 'Frontend', 'React, Vite'],
+  ['mobile', 'Mobile', 'Expo'],
+  ['infra', 'Infra', 'Docker, Terraform'],
+  ['other', 'Outros', 'Redis'],
+];
+const NO_MODEL_UPDATE_HINT = 'Seleção de modelos indisponível: atualize o Jarvis ADE para escolher modelos.';
 
 const state = {
   token: readToken(),
@@ -254,6 +267,27 @@ function badge(map, status) {
 const runBadge = (s) => badge(RUN_STATUS, s);
 const taskBadge = (s) => badge(TASK_STATUS, s);
 const triggerLabel = (t) => (t === 'manual' ? 'Manual' : 'Agendado');
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/** File -> base64 without the `data:` prefix (what POST /api/schedules/:id/attachments expects). */
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Não foi possível ler "${file.name}".`));
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(',') + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const parseList = (text) => [...new Set(text.split(/[,\n]/).map((x) => x.trim()).filter(Boolean))];
 
 // ---- shell / login ---------------------------------------------------------------------
 
@@ -571,7 +605,7 @@ async function scheduleFormView(main, ctx, id) {
     }),
     api('GET', '/api/catalog').catch((err) => {
       if (err.unauthorized) throw err;
-      return { squads: [] };
+      return { available: false, squads: [], maestros: [] };
     }),
   ]);
   if (!ctx.alive()) return;
@@ -579,9 +613,12 @@ async function scheduleFormView(main, ctx, id) {
   const workspaceError = Array.isArray(workspaces) ? null : workspaces.error;
   const workspaceList = Array.isArray(workspaces) ? workspaces : [];
   const squads = catalog?.squads ?? [];
+  const maestros = catalog?.maestros ?? [];
+  const catalogOk = catalog?.available !== false;
+  const models = Array.isArray(catalog?.models) ? catalog.models : null; // absent = Bridge without model selection
   const defaultTz = state.health?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const init = existing ?? { name: '', briefing: '', workspaceId: '', time: '09:00', days: [0, 1, 2, 3, 4, 5, 6], timezone: defaultTz, squadId: null, enabled: true };
+  const init = existing ?? { name: '', briefing: '', workspaceId: '', time: '09:00', days: [0, 1, 2, 3, 4, 5, 6], timezone: defaultTz, squadId: null, enabled: true, maestro: null, e2e: false, stack: {}, modelPool: [], agentModels: {}, attachments: [] };
 
   const banner = h('div', { class: 'alert alert-error', role: 'alert' });
   banner.hidden = true;
@@ -614,6 +651,149 @@ async function scheduleFormView(main, ctx, id) {
 
   const enabled = h('input', { id: 'f-enabled', type: 'checkbox', checked: init.enabled });
 
+  // ---- maestro ----
+  const maestro = h('select', { id: 'f-maestro', 'aria-describedby': 'f-maestro-hint' }, h('option', { value: '' }, 'Padrão do Jarvis ADE'));
+  for (const m of maestros.filter((x) => x.available)) maestro.append(h('option', { value: m.id }, m.label));
+  if (init.maestro && !maestros.some((m) => m.id === init.maestro && m.available)) maestro.append(h('option', { value: init.maestro }, `${init.maestro} (indisponível)`));
+  maestro.value = init.maestro ?? '';
+
+  // ---- E2E ----
+  const e2e = h('input', { id: 'f-e2e', type: 'checkbox', checked: init.e2e === true, 'aria-describedby': 'f-e2e-hint' });
+
+  // ---- stack (one comma-separated field per layer, like the Bridge's ProjectStack) ----
+  const stackInputs = Object.fromEntries(
+    STACK_LAYERS.map(([key, , example]) => [key, h('input', { id: `f-stack-${key}`, type: 'text', value: (init.stack?.[key] ?? []).join(', '), autocomplete: 'off', placeholder: `Ex.: ${example}` })]),
+  );
+
+  // ---- attachments (kept locally until the schedule is saved) ----
+  const existingFiles = [...(init.attachments ?? [])];
+  const removedIds = new Set();
+  const pendingFiles = [];
+  const fileList = h('ul', { class: 'file-list', 'aria-label': 'Anexos do agendamento' });
+  const fileNote = h('p', { class: 'hint', role: 'status' });
+  const fileInput = h('input', { id: 'f-files', type: 'file', multiple: true, 'aria-describedby': 'f-files-hint' });
+  const keptExisting = () => existingFiles.filter((a) => !removedIds.has(a.id));
+  const totalBytes = () => keptExisting().reduce((n, a) => n + a.size, 0) + pendingFiles.reduce((n, f) => n + f.size, 0);
+  function renderFiles() {
+    const rows = [
+      ...keptExisting().map((a) => ({ name: a.name, size: a.size, remove: () => removedIds.add(a.id) })),
+      ...pendingFiles.map((f) => ({ name: f.name, size: f.size, pending: true, remove: () => pendingFiles.splice(pendingFiles.indexOf(f), 1) })),
+    ];
+    fileList.replaceChildren(
+      ...rows.map((r) =>
+        h(
+          'li',
+          {},
+          h('span', { class: 'file-name' }, r.name),
+          h('span', { class: 'muted' }, fmtSize(r.size)),
+          r.pending && h('span', { class: 'muted' }, 'novo'),
+          h(
+            'button',
+            {
+              class: 'btn btn-sm btn-ghost',
+              type: 'button',
+              'aria-label': `Remover ${r.name}`,
+              onClick: () => {
+                r.remove();
+                fileNote.textContent = '';
+                renderFiles();
+              },
+            },
+            'Remover',
+          ),
+        ),
+      ),
+    );
+    fileList.hidden = rows.length === 0;
+    fileNote.hidden = fileNote.textContent === '';
+  }
+  fileInput.addEventListener('change', () => {
+    const problems = [];
+    for (const f of fileInput.files) {
+      if (f.size === 0) problems.push(`"${f.name}" está vazio.`);
+      else if (f.size > MAX_FILE_BYTES) problems.push(`"${f.name}" passa de ${fmtSize(MAX_FILE_BYTES)}.`);
+      else if (keptExisting().length + pendingFiles.length >= MAX_FILES) problems.push(`Limite de ${MAX_FILES} anexos por agendamento.`);
+      else if (totalBytes() + f.size > MAX_TOTAL_BYTES) problems.push(`Limite de ${fmtSize(MAX_TOTAL_BYTES)} no total de anexos.`);
+      else pendingFiles.push(f);
+    }
+    fileInput.value = '';
+    fileNote.textContent = problems.join(' ');
+    renderFiles();
+  });
+  renderFiles();
+
+  // ---- models: pool + per-agent (only when the Bridge advertises catalog.models) ----
+  let modelPool = [...(init.modelPool ?? [])];
+  let agentModels = { ...(init.agentModels ?? {}) };
+  const modelsBox = h('div', { class: 'stack-sm' });
+  const modelLabel = (id) => models?.find((m) => m.id === id)?.label ?? id;
+  const currentSquad = () => squads.find((s) => s.id === squad.value) ?? null;
+
+  function renderModels() {
+    if (!catalogOk) {
+      modelsBox.replaceChildren(h('p', { class: 'hint' }, 'Não foi possível carregar os modelos porque o Bridge está inacessível. As escolhas já salvas serão mantidas.'));
+      return;
+    }
+    if (!models) {
+      modelsBox.replaceChildren(h('p', { class: 'hint', 'data-role': 'models-unsupported' }, NO_MODEL_UPDATE_HINT));
+      return;
+    }
+    const sq = currentSquad();
+    const effectivePool = modelPool.length ? modelPool : sq?.modelPool ?? [];
+    const poolChips = models.map((m) => {
+      const input = h('input', { type: 'checkbox', value: m.id, checked: modelPool.includes(m.id), 'aria-label': `${m.label} (${m.adapter})` });
+      input.addEventListener('change', () => {
+        modelPool = input.checked ? [...modelPool, m.id] : modelPool.filter((x) => x !== m.id);
+        renderModels();
+      });
+      return h('label', { class: 'day chip', title: m.adapter }, input, h('span', {}, m.label));
+    });
+
+    // An override is only offered when the effective pool allows it (the Bridge rejects the rest).
+    const dropped = [];
+    const agentRows = (sq?.agents ?? []).map((agent) => {
+      const candidates = models.filter((m) => m.adapter === agent.adapter);
+      const allowed = candidates.filter((m) => effectivePool.includes(m.id));
+      const offered = effectivePool.length && allowed.length ? allowed : candidates;
+      if (agentModels[agent.agentId] && !offered.some((m) => m.id === agentModels[agent.agentId])) {
+        dropped.push(agent.name);
+        delete agentModels[agent.agentId];
+      }
+      const def = sq.agentModels?.[agent.agentId] ?? agent.model;
+      const select = h('select', { id: `f-agent-${agent.agentId}`, 'aria-label': `Modelo do agente ${agent.name}` }, h('option', { value: '' }, `Padrão (${modelLabel(def)})`));
+      for (const m of offered) select.append(h('option', { value: m.id }, m.label));
+      select.value = agentModels[agent.agentId] ?? '';
+      select.addEventListener('change', () => {
+        if (select.value) agentModels[agent.agentId] = select.value;
+        else delete agentModels[agent.agentId];
+      });
+      return h('div', { class: 'agent-row' }, h('label', { for: select.id }, agent.name, h('span', { class: 'muted' }, ` · ${agent.adapter}`)), select);
+    });
+
+    modelsBox.replaceChildren(
+      ...[
+      h(
+        'fieldset',
+        { 'aria-describedby': 'f-pool-hint' },
+        h('legend', {}, 'Modelos liberados'),
+        h('div', { class: 'days', role: 'group', 'aria-label': 'Modelos liberados' }, poolChips),
+        h('span', { class: 'hint', id: 'f-pool-hint' }, modelPool.length ? 'O maestro só poderá usar os modelos marcados.' : sq?.modelPool?.length ? 'Sem seleção: vale o pool do squad.' : 'Sem seleção: o maestro pode usar qualquer modelo.'),
+      ),
+      sq
+        ? agentRows.length
+          ? h('fieldset', {}, h('legend', {}, 'Modelo por agente'), h('div', { class: 'agent-rows' }, agentRows))
+          : null
+        : h('p', { class: 'hint' }, 'Escolha um squad para definir o modelo de cada agente.'),
+      dropped.length ? h('p', { class: 'hint', role: 'status' }, `Voltaram ao padrão por sair do pool: ${dropped.join(', ')}.`) : null
+      ].filter(Boolean),
+    );
+  }
+  squad.addEventListener('change', () => {
+    agentModels = {};
+    renderModels();
+  });
+  renderModels();
+
   const dayBoxes = DAY_LABELS.map((label, i) => ({
     i,
     input: h('input', { type: 'checkbox', value: String(i), checked: init.days.includes(i), 'aria-label': label }),
@@ -621,7 +801,7 @@ async function scheduleFormView(main, ctx, id) {
   }));
   const setDays = (set) => dayBoxes.forEach((d) => (d.input.checked = set.includes(d.i)));
 
-  const controls = { name, briefing, workspaceId: workspace, time, days: dayBoxes[0].input, timezone, squadId: squad, enabled };
+  const controls = { name, briefing, workspaceId: workspace, time, days: dayBoxes[0].input, timezone, squadId: squad, enabled, maestro, e2e, stack: stackInputs.backend, modelPool: modelsBox };
 
   const submit = h('button', { class: 'btn btn-primary', type: 'submit' }, id ? 'Salvar alterações' : 'Criar agendamento');
 
@@ -648,7 +828,42 @@ async function scheduleFormView(main, ctx, id) {
       timezone: timezone.value.trim(),
       squadId: squad.value || null,
       enabled: enabled.checked,
+      maestro: maestro.value || null,
+      e2e: e2e.checked,
+      stack: Object.fromEntries(STACK_LAYERS.map(([key]) => [key, parseList(stackInputs[key].value)])),
+      // Kept as-is when the model picker is hidden (old Bridge / Bridge down) so saved choices are not wiped.
+      modelPool,
+      agentModels,
     };
+  }
+
+  /** Goes to `hash`, re-rendering even when it is already the current one. */
+  function goto(hash) {
+    if (location.hash === hash) route();
+    else location.hash = hash;
+  }
+
+  /** Applies the attachment changes after the schedule exists. Returns an error message or null. */
+  async function syncFiles(scheduleId) {
+    for (const attId of removedIds) {
+      try {
+        await api('DELETE', `/api/schedules/${enc(scheduleId)}/attachments/${enc(attId)}`);
+      } catch (err) {
+        if (err.unauthorized) return null;
+        return `não foi possível remover um anexo: ${err.message}`;
+      }
+    }
+    for (const file of pendingFiles) {
+      submit.textContent = `Enviando ${file.name}…`;
+      try {
+        const data = await readAsBase64(file);
+        await api('POST', `/api/schedules/${enc(scheduleId)}/attachments`, { name: file.name, mime: file.type || 'application/octet-stream', data });
+      } catch (err) {
+        if (err.unauthorized) return null;
+        return `falha ao enviar "${file.name}": ${err.message}`;
+      }
+    }
+    return null;
   }
 
   const form = h(
@@ -668,15 +883,26 @@ async function scheduleFormView(main, ctx, id) {
         if (!input.timezone) return fail('Informe o fuso horário (ex.: America/Sao_Paulo).', 'timezone');
 
         submit.disabled = true;
+        const label = submit.textContent;
+        let saved;
         try {
-          await (id ? api('PUT', `/api/schedules/${enc(id)}`, input) : api('POST', '/api/schedules', input));
-          toast(id ? 'Agendamento atualizado.' : 'Agendamento criado.');
-          location.hash = '#/schedules';
+          saved = await (id ? api('PUT', `/api/schedules/${enc(id)}`, input) : api('POST', '/api/schedules', input));
         } catch (err) {
           if (err.unauthorized) return;
           fail(err.code === 'VALIDATION_ERROR' ? err.message : `Não foi possível salvar: ${err.message}`);
           submit.disabled = false;
+          return;
         }
+        const fileError = await syncFiles(saved.id);
+        if (fileError) {
+          // The schedule itself is saved: reopen it (so the user can retry the files) and say what failed.
+          toast(`Agendamento salvo, mas ${fileError}`, { error: true });
+          goto(`#/schedules/${enc(saved.id)}`);
+          return;
+        }
+        submit.textContent = label;
+        toast(id ? 'Agendamento atualizado.' : 'Agendamento criado.');
+        location.hash = '#/schedules';
       },
     },
     banner,
@@ -713,6 +939,40 @@ async function scheduleFormView(main, ctx, id) {
         h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onClick: () => setDays([1, 2, 3, 4, 5]) }, 'Dias úteis'),
       ),
       h('span', { class: 'hint muted', id: 'days-hint' }),
+    ),
+    h(
+      'div',
+      { class: 'field' },
+      h('label', { for: 'f-files' }, 'Anexos'),
+      fileInput,
+      h('span', { class: 'hint', id: 'f-files-hint' }, `Arquivos enviados ao maestro a cada execução (até ${fmtSize(MAX_FILE_BYTES)} cada, ${fmtSize(MAX_TOTAL_BYTES)} no total). Eles ficam guardados no plugin e são reenviados ao Jarvis ADE em todo disparo.`),
+      fileList,
+      fileNote,
+    ),
+    h(
+      'div',
+      { class: 'row' },
+      h(
+        'div',
+        { class: 'field' },
+        h('label', { for: 'f-maestro' }, 'Maestro'),
+        maestro,
+        h('span', { class: 'hint', id: 'f-maestro-hint' }, 'Só aparecem os maestros disponíveis nesta máquina.'),
+      ),
+    ),
+    modelsBox,
+    h(
+      'fieldset',
+      {},
+      h('legend', {}, 'Stack (opcional)'),
+      h('p', { class: 'hint' }, 'Tecnologias que você já conhece, separadas por vírgula. O maestro ainda analisa o projeto; isto só evita que ele tenha que adivinhar.'),
+      h('div', { class: 'row' }, STACK_LAYERS.map(([key, label]) => h('div', { class: 'field' }, h('label', { for: `f-stack-${key}` }, label), stackInputs[key]))),
+    ),
+    h(
+      'div',
+      { class: 'field' },
+      h('label', { class: 'switch', for: 'f-e2e' }, e2e, h('span', { class: 'track' }), 'Fluxo de teste E2E visível'),
+      h('span', { class: 'hint', id: 'f-e2e-hint' }, 'O QA roda a jornada end-to-end em um navegador visível. Requer um agente de QA (Reviewer) no squad.'),
     ),
     h('label', { class: 'switch', for: 'f-enabled' }, enabled, h('span', { class: 'track' }), 'Agendamento ativo'),
     h('div', { class: 'form-actions' }, submit, h('a', { class: 'btn', href: '#/schedules' }, 'Cancelar')),
@@ -825,7 +1085,34 @@ async function runsView(main, ctx, scheduleFilter) {
 
 // ---- Detalhe do disparo ----------------------------------------------------------------
 
-function runDetail(run, rawOpen) {
+/** "Opções usadas": what the plugin actually sent to the Bridge for this dispatch. */
+function optionsSection(o, catalog) {
+  const squad = catalog?.squads?.find((s) => s.id === o.squadId);
+  const modelName = (id) => catalog?.models?.find((m) => m.id === id)?.label ?? id;
+  const agentName = (id) => squad?.agents?.find((a) => a.agentId === id)?.name ?? id;
+  const maestroName = catalog?.maestros?.find((m) => m.id === o.maestro)?.label ?? o.maestro;
+  const stack = STACK_LAYERS.filter(([key]) => o.stack?.[key]?.length).map(([key, label]) => `${label}: ${o.stack[key].join(', ')}`);
+  const agents = Object.entries(o.agentModels ?? {});
+  const row = (term, value) => [h('dt', {}, term), h('dd', {}, value)];
+  const rows = [
+    ...row('Squad', o.squadId ? squad?.name ?? o.squadId : 'Padrão'),
+    ...row('Maestro', o.maestro ? maestroName : 'Padrão do Jarvis ADE'),
+    ...row('Teste E2E visível', o.e2e ? 'Sim' : 'Não'),
+    ...(stack.length ? row('Stack', h('ul', { class: 'plain-list' }, stack.map((line) => h('li', {}, line)))) : []),
+    ...(o.modelPool?.length ? row('Modelos liberados', o.modelPool.map(modelName).join(', ')) : []),
+    ...(agents.length ? row('Modelo por agente', h('ul', { class: 'plain-list' }, agents.map(([agentId, model]) => h('li', {}, `${agentName(agentId)} → ${modelName(model)}`)))) : []),
+    ...row(
+      'Anexos',
+      o.attachments?.length ? h('ul', { class: 'plain-list' }, o.attachments.map((a) => h('li', {}, a.name, h('span', { class: 'muted' }, ` (${fmtSize(a.size)})`)))) : 'Nenhum',
+    ),
+  ];
+  return [
+    h('section', { class: 'card', 'data-role': 'run-options' }, h('h2', { class: 'section-title' }, 'Opções usadas'), h('dl', { class: 'detail-grid' }, rows)),
+    ...(o.warnings ?? []).map((w) => h('div', { class: 'alert alert-warn', role: 'status', 'data-role': 'run-warning' }, w)),
+  ];
+}
+
+function runDetail(run, rawOpen, catalog) {
   const dur = fmtDuration(run.dispatchedAt, run.finishedAt);
   const row = (term, ...value) => [h('dt', {}, term), h('dd', {}, ...value)];
   const result = run.result;
@@ -849,6 +1136,8 @@ function runDetail(run, rawOpen) {
       ),
     ),
   ];
+
+  if (run.options) sections.push(...optionsSection(run.options, catalog));
 
   if (run.error) {
     sections.push(h('div', { class: 'alert alert-error', role: 'alert', 'data-role': 'run-error' }, h('strong', {}, 'Erro: '), run.error));
@@ -891,10 +1180,17 @@ function runDetail(run, rawOpen) {
 
 async function runDetailView(main, ctx, id) {
   let run = await api('GET', `/api/runs/${enc(id)}`);
+  // Names for squad/agents/models in "Opções usadas"; the raw ids are shown when the Bridge is down.
+  const catalog = run.options
+    ? await api('GET', '/api/catalog').catch((err) => {
+        if (err.unauthorized) throw err;
+        return null;
+      })
+    : null;
   if (!ctx.alive()) return;
 
   const body = h('div', { class: 'stack' });
-  const paint = () => body.replaceChildren(...runDetail(run, body.querySelector('details.raw')?.open));
+  const paint = () => body.replaceChildren(...runDetail(run, body.querySelector('details.raw')?.open, catalog));
 
   main.replaceChildren(
     h(

@@ -297,7 +297,7 @@ const parseList = (text) => [...new Set(text.split(/[,\n]/).map((x) => x.trim())
 const app = document.getElementById('app');
 
 function logout(message = '') {
-  if (EMBEDDED) return mountSessionExpired(message);
+  if (EMBEDDED) return mountSessionExpired();
   writeToken('');
   clearView();
   clearInterval(state.healthTimer);
@@ -307,7 +307,7 @@ function logout(message = '') {
 }
 
 /** Embedded 401: the host rotates its token when the plugin restarts and reloads the view; offer a manual reload meanwhile. */
-function mountSessionExpired(message = '') {
+function mountSessionExpired() {
   clearView();
   clearInterval(state.healthTimer);
   state.health = null;
@@ -319,7 +319,7 @@ function mountSessionExpired(message = '') {
       h(
         'div',
         { class: 'card login' },
-        h('p', { role: 'alert' }, message || 'A sessão do painel expirou (o plugin foi reiniciado).'),
+        h('p', { role: 'alert' }, 'A sessão do painel expirou (o plugin foi reiniciado). Recarregue para continuar.'),
         h('button', { class: 'btn btn-primary', type: 'button', onClick: () => location.reload() }, 'Recarregar'),
       ),
     ),
@@ -327,7 +327,7 @@ function mountSessionExpired(message = '') {
 }
 
 function mountLogin(message = '') {
-  if (EMBEDDED) return mountSessionExpired(message);
+  if (EMBEDDED) return mountSessionExpired();
   const input = h('input', {
     id: 'token',
     type: 'password',

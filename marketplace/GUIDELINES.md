@@ -55,7 +55,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | Funcionar só com os arquivos publicados, em Node "puro" | ✅ TypeScript já compilado em `dist/`; só módulos nativos do Node e `fetch` global |
 | Estado só em `ADE_PLUGIN_DATA_DIR`, com escrita atômica; a pasta do plugin é descartável | ✅ `schedules.json`, `runs/<id>.json`, `attachments/` via arquivo temporário + `rename`; arquivo ilegível = ausente |
 | `hello` reenviado a cada reinício: reconciliar, não repetir | ✅ registro do disparo gravado antes de chamar a Bridge (trava); teste de ponta a ponta "reinício não redispara o horário" |
-| Logs `{type:'log'}`, < 500 caracteres, sem segredos | ✅ mensagens curtas, tokens nunca registrados (testado) |
+| Logs `{type:'log'}`, ≤ 500 caracteres, sem segredos | ✅ `Emitter.log` corta em 500 caracteres (teste `protocol.test.ts`); tokens da Bridge são redigidos em `Bridge.redact` e o `dashboardToken` nunca é registrado |
 | Sair em até 5 s no `shutdown` (e com stdin fechado) | ✅ `shutdown` e fechamento do stdin encerram o servidor e saem com código 0 (teste e2e) |
 | `ready` cedo; sem `process.exit(1)` em erro recuperável | ✅ `ready` logo após subir; exceções não tratadas só vão para o log |
 | Timeouts em toda E/S de rede | ✅ chamadas à Bridge com timeout |

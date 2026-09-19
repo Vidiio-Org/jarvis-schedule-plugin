@@ -18,6 +18,7 @@ export function parseEventLine(line) {
         return null;
     return evt;
 }
+const MAX_LOG_CHARS = 500;
 export class Emitter {
     stream;
     constructor(stream) {
@@ -27,6 +28,7 @@ export class Emitter {
         this.stream.write(`${JSON.stringify(message)}\n`);
     }
     log(level, message) {
-        this.send({ type: 'log', level, message });
+        // The host shows at most 500 characters per log line.
+        this.send({ type: 'log', level, message: message.length > MAX_LOG_CHARS ? `${message.slice(0, MAX_LOG_CHARS - 1)}…` : message });
     }
 }

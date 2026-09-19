@@ -51,11 +51,11 @@ function digest(s) {
 export class ApiServer {
     opts;
     server = null;
-    tokenDigest;
+    tokenDigests;
     actualPort = 0;
     constructor(opts) {
         this.opts = opts;
-        this.tokenDigest = digest(opts.token);
+        this.tokenDigests = opts.tokens.map(digest);
     }
     get port() {
         return this.actualPort;
@@ -114,7 +114,13 @@ export class ApiServer {
         const header = req.headers.authorization ?? '';
         if (!header.startsWith('Bearer '))
             return false;
-        return timingSafeEqual(digest(header.slice(7).trim()), this.tokenDigest);
+        const candidate = digest(header.slice(7).trim());
+        // Compare against every token (no early exit) so timing does not reveal which one matched.
+        let ok = false;
+        for (const d of this.tokenDigests)
+            if (timingSafeEqual(candidate, d))
+                ok = true;
+        return ok;
     }
     readBody(req, maxBytes = MAX_BODY_BYTES) {
         return new Promise((resolve, reject) => {

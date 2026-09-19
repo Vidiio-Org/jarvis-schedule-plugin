@@ -59,7 +59,8 @@ function digest(s: string): Buffer {
 
 export interface ApiOptions {
   service: ScheduleService;
-  token: string;
+  /** Accepted bearer tokens: the user's dashboardToken and/or the host's per-launch viewToken. */
+  tokens: string[];
   port: number;
   /** Directory the dashboard's static files are served from (index.html, app.js, styles.css). */
   uiDir: string;
@@ -69,11 +70,11 @@ export interface ApiOptions {
 /** Local dashboard server: static ui/ + the token-protected /api/*. Binds 127.0.0.1 only. */
 export class ApiServer {
   private server: Server | null = null;
-  private readonly tokenDigest: Buffer;
+  private readonly tokenDigests: Buffer[];
   private actualPort = 0;
 
   constructor(private readonly opts: ApiOptions) {
-    this.tokenDigest = digest(opts.token);
+    this.tokenDigests = opts.tokens.map(digest);
   }
 
   get port(): number {
@@ -132,7 +133,11 @@ export class ApiServer {
   private authorized(req: IncomingMessage): boolean {
     const header = req.headers.authorization ?? '';
     if (!header.startsWith('Bearer ')) return false;
-    return timingSafeEqual(digest(header.slice(7).trim()), this.tokenDigest);
+    const candidate = digest(header.slice(7).trim());
+    // Compare against every token (no early exit) so timing does not reveal which one matched.
+    let ok = false;
+    for (const d of this.tokenDigests) if (timingSafeEqual(candidate, d)) ok = true;
+    return ok;
   }
 
   private readBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {

@@ -24,7 +24,7 @@ beforeEach(async () => {
   writeFileSync(join(ui.dir, 'dev', 'mock-server.mjs'), 'console.log("mock")');
   writeFileSync(join(secret.dir, 'secret.txt'), 'TOP SECRET');
   symlinkSync(join(secret.dir, 'secret.txt'), join(ui.dir, 'leak.txt'));
-  api = new ApiServer({ service: h.service, token: TOKEN, port: 0, uiDir: ui.dir, log: () => undefined });
+  api = new ApiServer({ service: h.service, tokens: [TOKEN], port: 0, uiDir: ui.dir, log: () => undefined });
   base = `http://127.0.0.1:${await api.start()}`;
 });
 
@@ -291,7 +291,7 @@ describe('static files', () => {
 
   it('a missing ui/index.html gives a friendly 404 at / but the API still works', async () => {
     const empty = makeTmp('jsp-empty-');
-    const other = new ApiServer({ service: h.service, token: TOKEN, port: 0, uiDir: empty.dir, log: () => undefined });
+    const other = new ApiServer({ service: h.service, tokens: [TOKEN], port: 0, uiDir: empty.dir, log: () => undefined });
     const p = await other.start();
     const r = await fetch(`http://127.0.0.1:${p}/`);
     expect(r.status).toBe(404);

@@ -12,7 +12,7 @@ let ui: { dir: string; cleanup: () => void };
 async function boot(bridgeOptions = {}): Promise<void> {
   h = await harness(undefined, {}, bridgeOptions);
   ui = makeTmp('jsp-ui-');
-  api = new ApiServer({ service: h.service, token: TOKEN, port: 0, uiDir: ui.dir, log: () => undefined });
+  api = new ApiServer({ service: h.service, tokens: [TOKEN], port: 0, uiDir: ui.dir, log: () => undefined });
   base = `http://127.0.0.1:${await api.start()}`;
 }
 

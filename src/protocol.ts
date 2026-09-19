@@ -3,11 +3,13 @@
 export interface HostEvent {
   type: string;
   settings?: Record<string, string>;
+  /** `hello` only, new ADE: `{ views: true, viewToken }`. Absent on older hosts. */
+  host?: unknown;
   [key: string]: unknown;
 }
 
 export type OutMessage =
-  | { type: 'ready'; name?: string }
+  | { type: 'ready'; name?: string; http?: { port: number } }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
   | { type: 'error'; message: string };
 

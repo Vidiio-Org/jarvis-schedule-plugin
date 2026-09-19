@@ -17,9 +17,9 @@ describe('resolveConfig', () => {
     });
   });
 
-  it('requires the tokens', () => {
+  it('requires bridgeToken; dashboardToken is optional (the host authenticates the embedded view)', () => {
     expect(() => resolveConfig({ dashboardToken: 'a-long-enough-token' })).toThrow(ConfigError);
-    expect(() => resolveConfig({ bridgeToken: 'bt' })).toThrow(/dashboardToken/);
+    expect(resolveConfig({ bridgeToken: 'bt' }).config.dashboardToken).toBeNull();
   });
 
   it('rejects a short dashboard token', () => {

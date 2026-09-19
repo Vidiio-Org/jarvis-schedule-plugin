@@ -48,12 +48,12 @@ export function resolveConfig(settings) {
     const bridgeToken = trimmed(settings.bridgeToken);
     if (bridgeToken === '')
         throw new ConfigError('Missing required setting "bridgeToken".');
-    const dashboardToken = trimmed(settings.dashboardToken);
-    if (dashboardToken === '')
-        throw new ConfigError('Missing required setting "dashboardToken".');
-    if (dashboardToken.length < MIN_DASHBOARD_TOKEN_LENGTH) {
+    // Optional: inside ADE the host authenticates the embedded view; the token is only for opening the dashboard in a browser.
+    const dashboardTokenRaw = trimmed(settings.dashboardToken);
+    if (dashboardTokenRaw !== '' && dashboardTokenRaw.length < MIN_DASHBOARD_TOKEN_LENGTH) {
         throw new ConfigError(`"dashboardToken" must be at least ${MIN_DASHBOARD_TOKEN_LENGTH} characters — it guards a dashboard that can start real missions.`);
     }
+    const dashboardToken = dashboardTokenRaw === '' ? null : dashboardTokenRaw;
     let dashboardPort = DEFAULT_DASHBOARD_PORT;
     if (trimmed(settings.dashboardPort) !== '') {
         const n = Number(trimmed(settings.dashboardPort));

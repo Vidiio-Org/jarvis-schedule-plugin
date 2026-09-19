@@ -166,7 +166,8 @@ export interface Config {
   bridgeUrl: string;
   bridgeToken: string;
   dashboardPort: number;
-  dashboardToken: string;
+  /** Null when not configured (optional since the embedded view is authenticated by the host). */
+  dashboardToken: string | null;
   defaultTimezone: string;
   historyRetentionDays: number;
   enabled: boolean;

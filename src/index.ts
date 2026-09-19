@@ -11,9 +11,10 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 import { ApiServer } from './api.js';
+import { parseHostHello, resolveApiTokens } from './auth.js';
 import { BridgeClient } from './bridge.js';
 import { ConfigError, loadSettings, resolveConfig } from './config.js';
-import { Emitter, parseEventLine } from './protocol.js';
+import { Emitter, parseEventLine, type HostEvent } from './protocol.js';
 import { ScheduleService } from './service.js';
 import { Store, type LogFn } from './store.js';
 
@@ -34,12 +35,12 @@ function readVersion(): string {
   }
 }
 
-async function handleHello(helloSettings?: Record<string, string>): Promise<void> {
+async function handleHello(event: HostEvent): Promise<void> {
   if (started) {
     log('info', 'Ignoring repeated hello: already running');
     return;
   }
-  const { settings, warning } = loadSettings(helloSettings);
+  const { settings, warning } = loadSettings(event.settings);
   if (warning) log('warn', warning);
 
   let resolved;
@@ -53,6 +54,9 @@ async function handleHello(helloSettings?: Record<string, string>): Promise<void
   }
   for (const w of resolved.warnings) log('warn', w);
   const { config } = resolved;
+  const host = parseHostHello(event.host);
+  if (host.invalid) log('warn', 'hello.host.viewToken is malformed; the embedded view will not be authenticated.');
+  const { tokens, fallbackToken } = resolveApiTokens({ dashboardToken: config.dashboardToken, viewToken: host.viewToken });
   started = true;
 
   const dataDir = process.env.ADE_PLUGIN_DATA_DIR?.trim() || join(process.cwd(), '.data');
@@ -64,7 +68,7 @@ async function handleHello(helloSettings?: Record<string, string>): Promise<void
     service = new ScheduleService({ config, store, bridge, log, version: readVersion() });
     api = new ApiServer({
       service,
-      token: config.dashboardToken,
+      tokens,
       port: config.dashboardPort,
       uiDir: fileURLToPath(new URL('../ui/', import.meta.url)),
       log
@@ -72,7 +76,10 @@ async function handleHello(helloSettings?: Record<string, string>): Promise<void
     const port = await api.start();
     service.start();
     log('info', `Dashboard listening on http://127.0.0.1:${port}/ — scheduler ${config.enabled ? 'enabled' : 'DISABLED (master switch off)'}`);
-    emitter.send({ type: 'ready', name: 'Jarvis Schedule' });
+    // Older-host fallback (no host.viewToken, no dashboardToken): a random per-launch token, shown in the local plugin log only.
+    if (fallbackToken) log('info', `Painel: http://127.0.0.1:${port}/ — token ${fallbackToken}`);
+    // The real bound port (dashboardPort may be 0): the host proxies the embedded view to it. Re-emitted on every (re)start.
+    emitter.send({ type: 'ready', name: 'Jarvis Schedule', http: { port } });
   } catch (err) {
     started = false;
     service?.stop();
@@ -100,11 +107,12 @@ const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on('line', (line) => {
   const event = parseEventLine(line);
   if (!event) {
-    log('warn', `Ignoring unparseable stdin line: ${line.slice(0, 120)}`);
+    // Never echo the line: a malformed hello can carry secrets (settings, viewToken).
+    log('warn', `Ignoring unparseable stdin line (${line.length} chars)`);
     return;
   }
   if (event.type === 'hello') {
-    void handleHello(event.settings);
+    void handleHello(event);
     return;
   }
   if (event.type === 'shutdown') {

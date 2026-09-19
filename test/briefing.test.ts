@@ -320,7 +320,7 @@ describe('attachment REST endpoints', () => {
     h = await harness();
     const ui = makeTmp('jsp-ui-');
     writeFileSync(join(ui.dir, 'index.html'), '<!doctype html>');
-    api = new ApiServer({ service: h.service, token: TOKEN, port: 0, uiDir: ui.dir, log: () => undefined });
+    api = new ApiServer({ service: h.service, tokens: [TOKEN], port: 0, uiDir: ui.dir, log: () => undefined });
     base = `http://127.0.0.1:${await api.start()}`;
   };
   afterEach(async () => {

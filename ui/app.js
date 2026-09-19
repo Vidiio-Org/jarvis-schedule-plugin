@@ -414,6 +414,17 @@ function clearView() {
   state.view.timers = [];
 }
 
+/** Models grouped by adapter (CLI), in the order each adapter first appears in the catalog. */
+function groupByAdapter(models) {
+  const groups = new Map();
+  for (const m of models) {
+    const key = m.adapter || 'outros';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(m);
+  }
+  return groups;
+}
+
 function parseHash() {
   const raw = location.hash.replace(/^#/, '') || '/schedules';
   const [path, query = ''] = raw.split('?');
@@ -426,8 +437,11 @@ async function route() {
   const ctx = {
     id: state.view.id,
     alive: () => ctx.id === state.view.id,
+    /** Runs `fn` every `ms` while the view is alive; returns a function that stops it. */
     every(ms, fn) {
-      state.view.timers.push(setInterval(() => ctx.alive() && fn(), ms));
+      const timer = setInterval(() => ctx.alive() && fn(), ms);
+      state.view.timers.push(timer);
+      return () => clearInterval(timer);
     },
   };
   const { segments, query } = parseHash();
@@ -749,19 +763,21 @@ async function scheduleFormView(main, ctx, id) {
       return h('label', { class: 'day chip', title: m.adapter }, input, h('span', {}, m.label));
     });
 
-    // An override is only offered when the effective pool allows it (the Bridge rejects the rest).
+    // Every catalog model is offered to every agent: the model implies the CLI, so an agent may run a model from
+    // another CLI. Only the effective pool narrows the list (the Bridge rejects a model outside it).
     const dropped = [];
     const agentRows = (sq?.agents ?? []).map((agent) => {
-      const candidates = models.filter((m) => m.adapter === agent.adapter);
-      const allowed = candidates.filter((m) => effectivePool.includes(m.id));
-      const offered = effectivePool.length && allowed.length ? allowed : candidates;
+      const inPool = models.filter((m) => effectivePool.includes(m.id));
+      const offered = effectivePool.length && inPool.length ? inPool : models;
       if (agentModels[agent.agentId] && !offered.some((m) => m.id === agentModels[agent.agentId])) {
         dropped.push(agent.name);
         delete agentModels[agent.agentId];
       }
       const def = sq.agentModels?.[agent.agentId] ?? agent.model;
       const select = h('select', { id: `f-agent-${agent.agentId}`, 'aria-label': `Modelo do agente ${agent.name}` }, h('option', { value: '' }, `Padrão (${modelLabel(def)})`));
-      for (const m of offered) select.append(h('option', { value: m.id }, m.label));
+      for (const [adapter, group] of groupByAdapter(offered)) {
+        select.append(h('optgroup', { label: adapter }, group.map((m) => h('option', { value: m.id }, m.label))));
+      }
       select.value = agentModels[agent.agentId] ?? '';
       select.addEventListener('change', () => {
         if (select.value) agentModels[agent.agentId] = select.value;
@@ -902,6 +918,8 @@ async function scheduleFormView(main, ctx, id) {
         }
         submit.textContent = label;
         toast(id ? 'Agendamento atualizado.' : 'Agendamento criado.');
+        // Save-time warnings (Bridge down, maestro unavailable…) come from the API as-is, like validation messages.
+        for (const warning of saved.warnings ?? []) toast(`Aviso: ${warning}`, { error: true });
         location.hash = '#/schedules';
       },
     },
@@ -1205,10 +1223,11 @@ async function runDetailView(main, ctx, id) {
 
   // Keep a live run fresh until it reaches a terminal status.
   if (ACTIVE_STATUSES.has(run.status)) {
-    ctx.every(DETAIL_REFRESH_MS, async () => {
+    const stopPolling = ctx.every(DETAIL_REFRESH_MS, async () => {
       try {
         run = await api('GET', `/api/runs/${enc(id)}`);
         if (ctx.alive()) paint();
+        if (!ACTIVE_STATUSES.has(run.status)) stopPolling();
       } catch {
         /* transient; the next tick retries */
       }

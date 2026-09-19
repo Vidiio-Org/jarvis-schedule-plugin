@@ -38,7 +38,6 @@
     "pretest": "tsc -p tsconfig.json",
     "test": "vitest run",
     "fake-bridge": "node test/fake-bridge.mjs",
-    "dev:mock": "node dev/mock-server.mjs",
     "validate": "npx -y jarvis-ade plugins validate .",
     "check-release": "node scripts/check-release.mjs"
   },

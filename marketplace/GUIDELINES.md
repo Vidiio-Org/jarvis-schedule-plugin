@@ -1,6 +1,6 @@
 # Checklist das diretrizes de plugins do Jarvis ADE
 
-Fontes: páginas <https://jarvisade.com/docs/plugins/> (`manifesto`, `protocolo`, `configuracoes`, `boas-praticas`, `publicar`, `marketplace`, `cli`; **não existe** uma página `/docs/plugins/marketplace/guidelines`, essa rota dá 404), `backend/docs/marketplace/DESIGN.md`, `plugin-manifest.schema.ts` e as verificações automáticas de `backend/src/marketplace/checks/plugin-checks.service.ts` (staff-agent). Estado em 2026-09-19, versão 0.1.0.
+Fontes: páginas <https://jarvisade.com/docs/plugins/> (`manifesto`, `protocolo`, `configuracoes`, `boas-praticas`, `publicar`, `marketplace`, `cli`; **não existe** uma página `/docs/plugins/marketplace/guidelines`, essa rota dá 404), `backend/docs/marketplace/DESIGN.md`, `plugin-manifest.schema.ts` e as verificações automáticas de `backend/src/marketplace/checks/plugin-checks.service.ts` (staff-agent). Estado em 2026-09-19, versão 1.0.0.
 
 Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi enviado nem publicado).
 
@@ -9,11 +9,11 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | Verificação | Regra | Estado |
 | --- | --- | --- |
 | `repo-reachable` | repositório GitHub público, URL exata `https://github.com/<dono>/<repo>` | ⏳ o repo `Vidiio-Org/jarvis-schedule-plugin` precisa ser enviado (push) e estar público; a URL já está em `package.json`, no manifesto e na listagem |
-| `manifest-valid` | `ade.plugin.json` na raiz do repo, válido pelo schema | ✅ `jarvis-ade plugins validate .` → válido; único aviso: `contributes.views` desconhecida pelo CLI atual (ver a linha de `views` abaixo) |
+| `manifest-valid` | `ade.plugin.json` na raiz do repo, válido pelo schema | ✅ `jarvis-ade plugins validate .` (CLI do worktree `feature-plugin-host-views`, que conhece `views` e `bridge`) → válido, 0 avisos. O `jarvis-ade` publicado no npm ainda pode avisar `unknown key` em `contributes.views`: é só aviso |
 | `npm-package` / `npm-manifest` | (só se informar pacote npm) o pacote existe, tem `latest` e traz `ade.plugin.json` na raiz | ⏳ publicar `jarvis-plugin-schedule`; `npm pack --dry-run` confirma que o tarball leva `ade.plugin.json` na raiz (`files`) |
 | `npm-repository` | `repository` do pacote aponta para o mesmo repo da listagem | ✅ `git+https://github.com/Vidiio-Org/jarvis-schedule-plugin.git` |
 | `plugin-id-match` | mesmo `id` no manifesto do GitHub e do npm | ✅ um único arquivo, `jarvis-schedule` |
-| `version-consistency` | versão do manifesto = `package.json` = tag | ✅ 0.1.0 nos dois; `scripts/check-release.mjs` confere também a tag `v0.1.0` |
+| `version-consistency` | versão do manifesto = `package.json` = tag | ✅ 1.0.0 nos dois; `scripts/check-release.mjs` confere também a tag `v1.0.0` |
 | `runtime-dependencies` | sem `dependencies` (o instalador só copia arquivos) | ✅ só `devDependencies` |
 | `install-scripts` | sem `preinstall`/`install`/`postinstall` | ✅ nenhum |
 | `npm-keyword` | palavra-chave `jarvis-ade-plugin` | ✅ |
@@ -24,7 +24,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | Regra | Estado |
 | --- | --- |
 | `id` kebab-case `/^[a-z0-9]+(-[a-z0-9]+)*$/` | ✅ `jarvis-schedule` |
-| `name` (≥ 1), `version` semver | ✅ "Jarvis Schedule", `0.1.0` |
+| `name` (≥ 1), `version` semver | ✅ "Jarvis Schedule", `1.0.0` |
 | `description`, `author`, `homepage`, `license` (opcionais, mas exigidos pela nossa tarefa) | ✅ descrição, `Vidiio`, `https://github.com/Vidiio-Org/jarvis-schedule-plugin`, `MIT` |
 | `contributes.settings[].key` `/^[a-zA-Z][a-zA-Z0-9_]*$/`, `type` ∈ string/secret/boolean/number | ✅ 7 configurações, todas camelCase; nenhuma `select` |
 | `default` sempre string, inclusive em número/booleano | ✅ `"4870"`, `"90"`, `"true"` |
@@ -32,7 +32,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | `events`: `[]` ou sem filtro entrega **tudo** (não "nada") | ✅ o plugin não usa eventos de `board.*`/`mission.*` (acompanha as missões pela Bridge); o filtro foi reduzido a `["mission.finished"]` para não receber o `board.snapshot` de todas as missões à toa |
 | Campos obrigatórios (`required: true`) travam o início até serem preenchidos | ✅ nenhuma configuração é obrigatória: `bridgeToken` e `bridgeUrl` são só o fallback de um ADE mais antigo (ADE 0.4.0+ entrega a Bridge em `hello.host.bridge`), `dashboardToken` só serve para abrir o painel num navegador. Sem Bridge do host e sem `bridgeToken`, o plugin emite `error` e o motivo (`ADE_BRIDGE=1` + token) fica no log |
 | Integração com `"bridge": true` | ✅ declarada em `contributes.integrations[scheduler]`; o plugin usa `hello.host.bridge` para toda chamada (REST e SSE), troca as credenciais ao vivo num `hello` repetido e nunca as registra |
-| `contributes.views` (tela nativa "Agendamentos") | ✅ `dashboard`, `icon: calendar-clock`, `integration: scheduler`. ⚠ o validador do CLI ainda não conhece `views` e avisa `unknown key`: é aviso, não erro, e some quando o CLI aprender `views` |
+| `contributes.views` (tela nativa "Agendamentos") | ✅ `dashboard`, `icon: calendar-clock`, `integration: scheduler`; o CLI que conhece `views` valida sem avisos (versões mais antigas do CLI avisam `unknown key`, aviso e não erro) |
 | Segredos: tipo `secret`, nunca em log | ✅ `bridgeToken`, `dashboardToken` são `secret` e não são registrados |
 
 ## Pacote e repositório (`publicar`)
@@ -71,7 +71,7 @@ Legenda: ✅ atendido · ⏳ depende de uma ação de quem publica (nada foi env
 | --- | --- |
 | Nome 2–60, slug 3–39, resumo ≤ 120, categoria válida, ≤ 8 tags (≤ 24 caracteres, `[a-z0-9-]`), descrição ≤ 20.000 | ✅ `marketplace/listing.md` (com as contagens) |
 | Repositório GitHub no formato exato | ✅ |
-| Capa recomendada 1200×630, capturas até 8, PNG/JPEG/WebP até 5 MiB | ✅ `marketplace/cover.png` (1200×630) e 4 capturas 1280×800, todas < 100 KB |
+| Capa recomendada 1200×630, capturas até 8, PNG/JPEG/WebP até 5 MiB | ✅ `marketplace/cover.png` (1200×630) e 4 capturas 1280×800 tiradas dentro do ADE, cada uma com menos de 200 KB |
 | Instalação `npx -y jarvis-ade plugins add <handle>/<slug>` / importação pela UI (npm ou URL git) | ✅ README e listagem descrevem a instalação pelo Marketplace (ícone **Agendamentos**, sem configurar) e a importação por URL git enquanto a listagem não é aprovada; o comando `npx` passa a valer depois da aprovação |
 | Fluxo Pendente → verificações automáticas → aprovação de um admin | ⏳ com quem envia |
 

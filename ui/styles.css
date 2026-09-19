@@ -184,6 +184,7 @@ h2 {
 }
 
 main {
+  container: page / inline-size;
   max-width: 1320px;
   margin: 0 auto;
   padding: 1.5rem 1.25rem 4rem;
@@ -313,11 +314,14 @@ input[type='time'] {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  max-width: 100%;
 }
 .filter select {
   width: auto;
-  min-width: 220px;
+  min-width: 0;
   max-width: 100%;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
 }
 
 /* ---- cards / alerts ---------------------------------------------------------------- */
@@ -427,7 +431,7 @@ table {
 }
 th,
 td {
-  padding: 0.7rem 0.85rem;
+  padding: 0.7rem 0.7rem;
   text-align: left;
   vertical-align: middle;
   border-bottom: 1px solid var(--border);
@@ -438,7 +442,6 @@ th {
   letter-spacing: 0.05em;
   color: var(--muted);
   font-weight: 650;
-  white-space: nowrap;
 }
 tbody tr:last-child td {
   border-bottom: 0;
@@ -458,6 +461,14 @@ td.actions {
 }
 .cell-title {
   font-weight: 650;
+  overflow-wrap: break-word;
+}
+/* long names/workspaces wrap on a bounded width instead of stretching the table */
+td.cell-name,
+td.cell-ws {
+  min-width: 8rem;
+  max-width: 18rem;
+  overflow-wrap: break-word;
 }
 .cell-sub {
   display: block;
@@ -864,7 +875,36 @@ dialog p {
     text-align: center;
   }
 
-  /* tables collapse into stacked cards, labelled through data-label */
+  .detail-grid {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+  .detail-grid dd {
+    margin-bottom: 0.6rem;
+  }
+  .filter {
+    width: 100%;
+  }
+  .filter select {
+    flex: 1;
+    min-width: 0;
+  }
+  .toasts {
+    justify-items: stretch;
+  }
+  .toast {
+    max-width: none;
+  }
+}
+
+/* Tables collapse into stacked cards, labelled through data-label, when the PAGE (not the window) is narrow:
+   inside ADE the window is wide but the missions sidebar eats ~260px of it, so a viewport breakpoint misses it. */
+@container page (max-width: 1140px) {
+  td.cell-name,
+  td.cell-ws {
+    min-width: 0;
+    max-width: none;
+  }
   .table-wrap {
     border: 0;
     background: transparent;
@@ -926,24 +966,4 @@ dialog p {
     min-width: 0;
   }
 
-  .detail-grid {
-    grid-template-columns: 1fr;
-    gap: 0.1rem;
-  }
-  .detail-grid dd {
-    margin-bottom: 0.6rem;
-  }
-  .filter {
-    width: 100%;
-  }
-  .filter select {
-    flex: 1;
-    min-width: 0;
-  }
-  .toasts {
-    justify-items: stretch;
-  }
-  .toast {
-    max-width: none;
-  }
 }

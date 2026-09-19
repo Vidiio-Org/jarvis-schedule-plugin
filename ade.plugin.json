@@ -1,7 +1,7 @@
 {
   "id": "jarvis-schedule",
   "name": "Jarvis Schedule",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Runs recurring scheduled missions: define a briefing, workspace, time window and optional squad, and every day at that time the plugin dispatches a fully autonomous mission into ADE, keeping a history of each dispatch and the data the maestro returned. Ships its own local web dashboard.",
   "author": "Vidiio",
   "homepage": "https://github.com/Vidiio-Org/jarvis-schedule-plugin",

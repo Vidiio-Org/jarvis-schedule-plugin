@@ -18,16 +18,16 @@ Os limites abaixo vêm de `backend/src/marketplace/marketplace.constants.ts` (st
 | **Site** (opcional) | `https://github.com/Vidiio-Org/jarvis-schedule-plugin#readme` | HTTPS |
 | **Licença** | MIT | arquivo `LICENSE` na raiz |
 | **Capa** | `marketplace/cover.png` (1200×630, PNG) | recomendado 1200×630; PNG, JPEG ou WebP, até 5 MiB |
-| **Capturas de tela** | `marketplace/screenshots/*.png` (4 de até 8, PNG, 1280 px de largura; a 02 é a página inteira do formulário, 1280×1905) | até 5 MiB cada, legenda de até 140 caracteres |
+| **Capturas de tela** | `marketplace/screenshots/*.png` (4 de até 8, PNG, 1280×800, dentro do ADE) | até 5 MiB cada, legenda de até 140 caracteres |
 
 ### Legendas das capturas de tela
 
-1. `01-agendamentos.png` — Lista de agendamentos com horário, dias, fuso, próxima e última execução.
-2. `02-novo-agendamento.png` — Formulário completo: briefing, workspace, horário, fuso, squad, dias, anexos, maestro, modelos por agente, stack e E2E.
-3. `03-historico.png` — Histórico de disparos com origem, horário e status (Em execução, Concluído e Falhou).
-4. `04-detalhe-do-disparo.png` — Detalhe de um disparo: resumo final do maestro e tarefas com resultado.
+1. `01-agendamentos.png` — Tela **Agendamentos** dentro do ADE: horário, dias, fuso, próxima e última execução, com Executar agora, Editar e Excluir.
+2. `02-formulario-squad-modelos.png` — Formulário de novo agendamento: modelos permitidos, modelo por agente, stack e fluxo de teste E2E.
+3. `03-historico.png` — Histórico de disparos com origem, horário e status Concluído.
+4. `04-plugins-instalados.png` — Marketplace de Plugins → Instalados, com o Jarvis Schedule em execução e o botão Open Agendamentos.
 
-As capturas foram tiradas do painel de verdade (`dist/index.js` + `ui/`, iniciado como o ADE novo o inicia: Bridge entregue em `hello.host.bridge`) rodando contra a Bridge falsa do repositório (`test/fake-bridge.mjs`), aberto num navegador; os nomes de workspace, briefings e resumos são dados de demonstração. Por isso mostram o cabeçalho "Jarvis Agendador" e o botão **Sair**, que não aparecem na tela dentro do ADE.
+As quatro capturas foram tiradas **dentro do Jarvis ADE** (ADE 0.4.0, plugin instalado pela pasta, Bridge automática), com dados de demonstração: o workspace, o briefing e os resultados são fictícios.
 
 ## Descrição (Markdown, pt-BR)
 
@@ -75,15 +75,3 @@ Código aberto, licença MIT. Documentação completa no [README](https://github
 1. Publicar o pacote npm `jarvis-plugin-schedule` pelo fluxo de tag `vX.Y.Z` (`.github/workflows/publish.yml`, precisa do segredo `NPM_TOKEN`) e enviar o repositório ao GitHub. Sem o pacote, o cadastro vale só pela origem git.
 2. Conferir que `package.json`, `ade.plugin.json` e a tag têm a mesma versão (`npm run check-release`).
 3. Enviar o formulário com os campos acima e as imagens; a listagem entra como *Pendente* até a aprovação de um administrador.
-
-## Pendências (capturas dentro do app)
-
-As capturas atuais mostram o painel num navegador. A card final de E2E deve acrescentar capturas **dentro do ADE** (a lista abaixo é o que falta; quem publica só as adiciona à pasta `marketplace/screenshots/` e às legendas):
-
-- [ ] Barra lateral do ADE com o ícone **Agendamentos** ao lado do de Plugins.
-- [ ] Tela **Agendamentos** aberta dentro do app (sem cabeçalho "Jarvis Agendador" nem botão Sair, com "Conectado à Bridge do ADE (automático)").
-- [ ] Formulário de novo agendamento dentro do app, com squad e seletores de modelo.
-- [ ] Histórico com disparos **Em execução** e **Concluído** dentro do app.
-- [ ] Detalhe de um disparo (resumo do maestro e tarefas) dentro do app.
-- [ ] Marketplace de Plugins → Instalados com o **Jarvis Schedule** instalado e a integração em execução.
-- [ ] Depois de tirar as novas, reordenar: as capturas dentro do app passam a ser as primeiras, as do navegador ficam como apoio ou saem (máximo de 8).

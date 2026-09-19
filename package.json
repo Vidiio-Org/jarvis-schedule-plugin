@@ -1,6 +1,6 @@
 {
   "name": "jarvis-plugin-schedule",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Jarvis ADE plugin that dispatches recurring scheduled missions, keeps a history of every dispatch and the data the maestro returned, and serves its own local dashboard",
   "license": "MIT",

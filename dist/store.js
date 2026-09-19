@@ -1,5 +1,6 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
+import { withOptionDefaults } from './validation.js';
 /**
  * Persistence under ADE_PLUGIN_DATA_DIR.
  *
@@ -34,8 +35,10 @@ export class Store {
     load() {
         try {
             const parsed = JSON.parse(readFileSync(this.schedulesFile, 'utf8'));
-            for (const s of parsed.schedules ?? [])
-                this.schedules.set(s.id, s);
+            // Schedules written by older plugin versions lack the briefing options: fill the defaults.
+            for (const s of parsed.schedules ?? []) {
+                this.schedules.set(s.id, { ...withOptionDefaults(s), attachments: Array.isArray(s.attachments) ? s.attachments : [] });
+            }
         }
         catch (err) {
             if (err.code !== 'ENOENT') {
@@ -56,6 +59,7 @@ export class Store {
                 const run = JSON.parse(readFileSync(join(this.runsDir, file), 'utf8'));
                 if (typeof run.id !== 'string')
                     throw new Error('missing id');
+                run.options ??= null;
                 this.runs.set(run.id, run);
                 if (run.slotKey)
                     this.slotKeys.add(run.slotKey);

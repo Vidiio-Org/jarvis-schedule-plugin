@@ -118,7 +118,12 @@ describe('read endpoints', () => {
       { id: 'ws-1', name: 'Demo workspace', path: '/tmp/demo-workspace' },
       { id: 'ws-2', name: 'Second workspace', path: '/tmp/second-workspace' }
     ]);
-    expect((await call('GET', '/api/catalog')).json.data).toEqual({ squads: [{ id: 'squad-1', name: 'Demo squad' }] });
+    const catalog = (await call('GET', '/api/catalog')).json.data;
+    expect(catalog.available).toBe(true);
+    expect(catalog.squads[0]).toMatchObject({ id: 'squad-1', name: 'Demo squad' });
+    expect(catalog.squads[0].agents.map((a: { agentId: string }) => a.agentId)).toEqual(['architect', 'developer', 'reviewer']);
+    expect(catalog.maestros.map((m: { id: string }) => m.id)).toContain('claude-code');
+    expect(catalog.models.map((m: { id: string }) => m.id)).toContain('claude-sonnet-5');
   });
 
   it('502 BRIDGE_UNAVAILABLE for workspaces, [] squads, when the Bridge is down', async () => {
@@ -126,7 +131,7 @@ describe('read endpoints', () => {
     const ws = await call('GET', '/api/workspaces');
     expect(ws.status).toBe(502);
     expect(ws.json).toMatchObject({ ok: false, code: 'BRIDGE_UNAVAILABLE' });
-    expect((await call('GET', '/api/catalog')).json).toEqual({ ok: true, data: { squads: [] } });
+    expect((await call('GET', '/api/catalog')).json).toEqual({ ok: true, data: { available: false, squads: [], maestros: [] } });
     h.bridge = await (await import('./fake-bridge.mjs')).startFakeBridge();
   });
 });
@@ -138,7 +143,7 @@ describe('schedules', () => {
     const s = created.json.data;
     expect(s).toMatchObject({ name: 'Daily report', workspaceName: 'Demo workspace', time: '12:00', timezone: 'UTC', squadId: null, enabled: true, lastRunAt: null });
     expect(Object.keys(s).sort()).toEqual(
-      ['briefing', 'createdAt', 'days', 'enabled', 'id', 'lastRunAt', 'name', 'nextRunAt', 'squadId', 'time', 'timezone', 'updatedAt', 'workspaceId', 'workspaceName'].sort()
+      ['agentModels', 'attachments', 'briefing', 'createdAt', 'days', 'e2e', 'enabled', 'id', 'lastRunAt', 'maestro', 'modelPool', 'name', 'nextRunAt', 'squadId', 'stack', 'time', 'timezone', 'updatedAt', 'workspaceId', 'workspaceName'].sort()
     );
     expect(s).not.toHaveProperty('armedAt');
     expect(typeof s.nextRunAt).toBe('string');
@@ -190,7 +195,7 @@ describe('runs', () => {
     expect(run.status).toBe(200);
     expect(run.json.data).toMatchObject({ scheduleId: s.id, scheduleName: 'Daily report', trigger: 'manual', status: 'running', scheduledFor: null, error: null, summary: null, result: null });
     expect(Object.keys(run.json.data).sort()).toEqual(
-      ['dispatchedAt', 'error', 'finishedAt', 'id', 'missionId', 'missionName', 'result', 'scheduleId', 'scheduleName', 'scheduledFor', 'status', 'summary', 'trigger'].sort()
+      ['dispatchedAt', 'error', 'finishedAt', 'id', 'missionId', 'missionName', 'options', 'result', 'scheduleId', 'scheduleName', 'scheduledFor', 'status', 'summary', 'trigger'].sort()
     );
     expect(h.bridge.createRequests).toHaveLength(1);
 

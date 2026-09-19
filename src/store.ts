@@ -12,6 +12,7 @@ import {
 import { join } from 'node:path';
 
 import type { StoredRun, StoredSchedule } from './types.js';
+import { withOptionDefaults } from './validation.js';
 
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
 
@@ -50,7 +51,10 @@ export class Store {
   private load(): void {
     try {
       const parsed = JSON.parse(readFileSync(this.schedulesFile, 'utf8')) as { schedules?: StoredSchedule[] };
-      for (const s of parsed.schedules ?? []) this.schedules.set(s.id, s);
+      // Schedules written by older plugin versions lack the briefing options: fill the defaults.
+      for (const s of parsed.schedules ?? []) {
+        this.schedules.set(s.id, { ...withOptionDefaults(s), attachments: Array.isArray(s.attachments) ? s.attachments : [] });
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         const backup = `${this.schedulesFile}.corrupt-${Date.now()}`;
@@ -67,6 +71,7 @@ export class Store {
       try {
         const run = JSON.parse(readFileSync(join(this.runsDir, file), 'utf8')) as StoredRun;
         if (typeof run.id !== 'string') throw new Error('missing id');
+        run.options ??= null;
         this.runs.set(run.id, run);
         if (run.slotKey) this.slotKeys.add(run.slotKey);
       } catch (err) {

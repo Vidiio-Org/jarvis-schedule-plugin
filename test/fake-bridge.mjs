@@ -5,13 +5,20 @@
  *   - GET  /api/health, /api/snapshot, /api/catalog, /api/missions, /api/missions/:id
  *   - POST /api/missions  (creates AND starts; requires `brief`; validates workspaceId/squadId/mode)
  *   - GET  /api/events    (SSE: `event: hello`, `event: mission:update` with the Mission FLAT, `: ping`)
+ *   - POST /api/attachments (staging pantry: {name, mime, data: base64} -> {attachment:{id,name,mime,size}}; evicts
+ *     the oldest id past `attachmentRegistryMax`, like the real MissionAttachmentRegistry)
+ *   - POST /api/missions also validates maestro, e2e, stack, attachmentIds and (modern mode) modelPool/agentModels
+ *   - GET  /api/catalog serves squads with agents, maestros and — unless `legacy` — `models`
+ *
+ * `legacy: true` (CLI: --legacy) emulates an OLD bridge: no `models` in the catalog, and modelPool/agentModels in a
+ * mission body are silently ignored (the request is still recorded so tests can assert none was sent).
  *
  * Library use:
  *   const bridge = await startFakeBridge({ token: 'secret' });
  *   bridge.finishMission(id, { summary: '...', tasks: [{ title, status: 'done', result }] });
  *   await bridge.stop();
  * CLI use (for manual / E2E runs):
- *   node test/fake-bridge.mjs --port 4820 --token secret [--auto-finish-ms 3000]
+ *   node test/fake-bridge.mjs --port 4820 --token secret [--auto-finish-ms 3000] [--legacy]
  */
 
 import { createServer } from 'node:http';
@@ -23,7 +30,37 @@ export async function startFakeBridge(options = {}) {
     { id: 'ws-1', name: 'Demo workspace', path: '/tmp/demo-workspace' },
     { id: 'ws-2', name: 'Second workspace', path: '/tmp/second-workspace' }
   ];
-  const squads = options.squads ?? [{ id: 'squad-1', name: 'Demo squad', description: 'fake', agents: [] }];
+  const squads = options.squads ?? [
+    {
+      id: 'squad-1',
+      name: 'Demo squad',
+      description: 'Architect, developer and reviewer',
+      agents: [
+        { agentId: 'architect', name: 'Architect', adapter: 'claude', model: 'claude-opus-5' },
+        { agentId: 'developer', name: 'Developer', adapter: 'claude', model: 'claude-sonnet-5' },
+        { agentId: 'reviewer', name: 'Reviewer (QA)', adapter: 'codex', model: 'gpt-5.6-terra' }
+      ],
+      modelPool: [],
+      agentModels: {}
+    }
+  ];
+  const legacy = options.legacy === true;
+  const models = options.models ?? [
+    { id: 'claude-opus-5', label: 'Opus 5', adapter: 'claude', tier: 'frontier', cost: 'high' },
+    { id: 'claude-sonnet-5', label: 'Sonnet 5', adapter: 'claude', tier: 'standard', cost: 'medium' },
+    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', adapter: 'claude', tier: 'fast', cost: 'low' },
+    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', adapter: 'codex', tier: 'frontier', cost: 'high' },
+    { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', adapter: 'codex', tier: 'standard', cost: 'medium' },
+    { id: 'gemini-3-flash', label: 'Gemini 3 Flash', adapter: 'gemini', tier: 'fast', cost: 'low' }
+  ];
+  const maestros = options.maestros ?? [
+    { id: 'claude-code', label: 'Claude Code', available: true },
+    { id: 'codex', label: 'Codex', available: true },
+    { id: 'gemini', label: 'Gemini', available: false },
+    { id: 'mock', label: 'Mock (scripted, no CLI required)', available: true }
+  ];
+  const attachmentRegistryMax = options.attachmentRegistryMax ?? 500;
+  const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
   const state = {
     token,
@@ -40,7 +77,13 @@ export async function startFakeBridge(options = {}) {
     failCreateWith: { status: 409, code: 'MISSION_START_FAILED', message: 'The mission failed to start.' },
     /** When true, POST /api/missions drops the connection without replying. */
     hangUpOnCreate: false,
-    sseClients: new Set()
+    sseClients: new Set(),
+    legacy,
+    /** Attachment staging pantry: id -> {id, name, mime, size, data (base64)}; insertion order = age. */
+    attachments: new Map(),
+    /** When > 0, the next N POST /api/attachments calls answer with `failUploadWith`. */
+    failUpload: 0,
+    failUploadWith: { status: 413, code: 'TOO_LARGE', message: 'The attachment exceeds the limit.' }
   };
 
   const send = (res, status, body) => {
@@ -97,8 +140,15 @@ export async function startFakeBridge(options = {}) {
         return ok(res, {
           activeWorkspaceId: workspaces[0]?.id ?? null,
           workspaces,
-          squads: squads.map((s) => ({ id: s.id, name: s.name, description: s.description ?? '', agents: s.agents ?? [] })),
-          maestros: [{ id: 'mock', label: 'Mock', available: true }]
+          squads: squads.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description ?? '',
+            agents: s.agents ?? [],
+            ...(legacy ? {} : { modelPool: s.modelPool ?? [], agentModels: s.agentModels ?? {} })
+          })),
+          maestros,
+          ...(legacy ? {} : { models })
         });
       }
       if (method === 'GET' && url.pathname === '/api/missions') {
@@ -115,6 +165,30 @@ export async function startFakeBridge(options = {}) {
           boardColumns: state.boardColumns.filter((c) => c.missionId === id),
           boardCards: state.boardCards.filter((c) => c.missionId === id)
         });
+      }
+      if (method === 'POST' && url.pathname === '/api/attachments') {
+        let body;
+        try {
+          body = await readBody(req);
+        } catch {
+          return err(res, 400, 'BAD_JSON', 'Request body is not valid JSON.');
+        }
+        record.body = { ...body, data: typeof body.data === 'string' ? `<${body.data.length} base64 chars>` : body.data, rawData: body.data };
+        if (state.failUpload > 0) {
+          state.failUpload -= 1;
+          const f = state.failUploadWith;
+          return err(res, f.status, f.code, f.message);
+        }
+        if (typeof body.name !== 'string' || body.name.trim() === '') return err(res, 400, 'BAD_REQUEST', '"name" is required and must not be empty.');
+        if (typeof body.mime !== 'string' || body.mime.trim() === '') return err(res, 400, 'BAD_REQUEST', '"mime" is required and must not be empty.');
+        if (typeof body.data !== 'string' || body.data === '') return err(res, 400, 'BAD_REQUEST', '"data" is required (base64, no data: prefix).');
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body.data)) return err(res, 400, 'BAD_REQUEST', '"data" is not valid base64.');
+        const size = Buffer.byteLength(body.data, 'base64');
+        if (size > MAX_ATTACHMENT_BYTES) return err(res, 413, 'TOO_LARGE', `"${body.name}" exceeds the 50 MB attachment limit.`);
+        const id = randomUUID();
+        state.attachments.set(id, { id, name: body.name, mime: body.mime, size, data: body.data });
+        if (state.attachments.size > attachmentRegistryMax) state.attachments.delete(state.attachments.keys().next().value);
+        return ok(res, { attachment: { id, name: body.name, mime: body.mime, size } });
       }
       if (method === 'POST' && url.pathname === '/api/missions') {
         if (state.hangUpOnCreate) {
@@ -149,6 +223,56 @@ export async function startFakeBridge(options = {}) {
           if (!squads.some((s) => s.id === body.squadId)) return err(res, 404, 'NOT_FOUND', `Squad "${body.squadId}" does not exist.`);
           squadId = body.squadId;
         }
+        if (body.maestro !== undefined && !maestros.some((m) => m.id === body.maestro)) {
+          return err(res, 400, 'BAD_REQUEST', `"maestro" must be one of ${maestros.map((m) => m.id).join(', ')}.`);
+        }
+        if (body.e2e !== undefined && typeof body.e2e !== 'boolean') return err(res, 400, 'BAD_REQUEST', '"e2e" must be a boolean.');
+        if (body.stack !== undefined) {
+          const layers = ['backend', 'frontend', 'mobile', 'infra', 'other'];
+          const okStack =
+            body.stack && typeof body.stack === 'object' &&
+            Object.entries(body.stack).every(([k, v]) => layers.includes(k) && Array.isArray(v) && v.every((x) => typeof x === 'string'));
+          if (!okStack) return err(res, 400, 'BAD_REQUEST', '"stack" must be {backend?, frontend?, mobile?, infra?, other?: string[]}.');
+        }
+        let attachments = [];
+        if (body.attachmentIds !== undefined) {
+          if (!Array.isArray(body.attachmentIds) || body.attachmentIds.some((v) => typeof v !== 'string' || v === '')) {
+            return err(res, 400, 'BAD_REQUEST', '"attachmentIds" must be an array of non-empty strings.');
+          }
+          for (const attId of body.attachmentIds) {
+            const a = state.attachments.get(attId);
+            if (!a) return err(res, 404, 'NOT_FOUND', `Attachment "${attId}" does not exist — it was never uploaded, or it aged out of the upload pantry.`);
+            attachments.push({ id: a.id, name: a.name, mime: a.mime, size: a.size });
+          }
+        }
+        let modelPool = [];
+        let agentModels = {};
+        if (!legacy) {
+          if (body.modelPool !== undefined) {
+            if (!Array.isArray(body.modelPool) || body.modelPool.some((v) => typeof v !== 'string' || v === '')) {
+              return err(res, 400, 'BAD_REQUEST', '"modelPool" must be an array of non-empty strings.');
+            }
+            const unknown = body.modelPool.find((m) => !models.some((x) => x.id === m));
+            if (unknown) return err(res, 400, 'BAD_REQUEST', `Unknown model "${unknown}" in "modelPool".`);
+            modelPool = [...new Set(body.modelPool)];
+          }
+          if (body.agentModels !== undefined) {
+            if (typeof body.agentModels !== 'object' || body.agentModels === null || Array.isArray(body.agentModels)) {
+              return err(res, 400, 'BAD_REQUEST', '"agentModels" must be an object mapping agent ids to model ids.');
+            }
+            const roster = squadId ? squads.find((s) => s.id === squadId)?.agents ?? [] : squads.flatMap((s) => s.agents ?? []);
+            for (const [agentId, modelId] of Object.entries(body.agentModels)) {
+              const agent = roster.find((a) => a.agentId === agentId);
+              if (!agent) return err(res, 400, 'BAD_REQUEST', `Unknown agent "${agentId}" in "agentModels".`);
+              const model = models.find((m) => m.id === modelId);
+              if (!model) return err(res, 400, 'BAD_REQUEST', `Unknown model "${modelId}" in "agentModels".`);
+              if (model.adapter !== agent.adapter) {
+                return err(res, 400, 'BAD_REQUEST', `Model "${modelId}" (${model.adapter}) does not match agent "${agentId}" (${agent.adapter}).`);
+              }
+            }
+            agentModels = body.agentModels;
+          }
+        }
         const mission = {
           id: randomUUID(),
           workspaceId,
@@ -157,7 +281,11 @@ export async function startFakeBridge(options = {}) {
           squadId,
           maestro: body.maestro ?? 'mock',
           brief: body.brief,
-          attachments: [],
+          attachments,
+          e2e: body.e2e === true,
+          stack: body.stack ?? null,
+          modelPool,
+          agentModels,
           worktree: null,
           status: 'running',
           archived: false,
@@ -216,6 +344,14 @@ export async function startFakeBridge(options = {}) {
     },
     get requests() {
       return state.requests;
+    },
+    /** POST /api/attachments requests only (`body.rawData` holds the base64 payload). */
+    get uploadRequests() {
+      return state.requests.filter((r) => r.method === 'POST' && r.path === '/api/attachments');
+    },
+    /** Files currently held by the attachment pantry. */
+    get attachments() {
+      return [...state.attachments.values()];
     },
     /** POST /api/missions requests only. */
     get createRequests() {
@@ -278,7 +414,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const bridge = await startFakeBridge({
     port: Number(arg('port', '4820')),
     token: arg('token', 'fake-bridge-token'),
-    autoFinishMs: Number(arg('auto-finish-ms', '0'))
+    autoFinishMs: Number(arg('auto-finish-ms', '0')),
+    legacy: process.argv.includes('--legacy')
   });
   console.log(`fake ADE bridge listening on ${bridge.url} (token=${bridge.token})`);
   const shutdown = () => bridge.stop().then(() => process.exit(0));

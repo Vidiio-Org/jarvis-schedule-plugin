@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { extname, join, sep } from 'node:path';
+import { MAX_ATTACHMENT_BODY_BYTES, PayloadTooLargeError } from './attachments.js';
 import { BridgeError } from './bridge.js';
 import { NotFoundError } from './service.js';
 import { ValidationError } from './validation.js';
@@ -113,14 +114,14 @@ export class ApiServer {
             return false;
         return timingSafeEqual(digest(header.slice(7).trim()), this.tokenDigest);
     }
-    readBody(req) {
+    readBody(req, maxBytes = MAX_BODY_BYTES) {
         return new Promise((resolve, reject) => {
             const chunks = [];
             let size = 0;
             req.on('data', (chunk) => {
                 size += chunk.length;
-                if (size > MAX_BODY_BYTES) {
-                    reject(new HttpError(413, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${MAX_BODY_BYTES} bytes.`));
+                if (size > maxBytes) {
+                    reject(new HttpError(413, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${maxBytes} bytes.`));
                     req.destroy();
                     return;
                 }
@@ -172,6 +173,8 @@ export class ApiServer {
             return this.sendJson(res, err.status, { ok: false, code: err.code, message: err.message });
         if (err instanceof ValidationError)
             return this.sendJson(res, 400, { ok: false, code: 'VALIDATION_ERROR', message: err.message });
+        if (err instanceof PayloadTooLargeError)
+            return this.sendJson(res, 413, { ok: false, code: 'PAYLOAD_TOO_LARGE', message: err.message });
         if (err instanceof NotFoundError)
             return this.sendJson(res, 404, { ok: false, code: 'NOT_FOUND', message: err.message });
         if (err instanceof BridgeError) {
@@ -206,7 +209,7 @@ export class ApiServer {
         }
         if (path === '/api/catalog') {
             only('GET');
-            return [200, { squads: await svc.squads() }];
+            return [200, await svc.catalog()];
         }
         if (path === '/api/schedules') {
             if (method === 'GET')
@@ -223,6 +226,19 @@ export class ApiServer {
                 throw new HttpError(502, 'BRIDGE_UNAVAILABLE', `ADE Bridge unavailable: ${outcome.run.error ?? 'could not reach the Bridge'}`);
             }
             return [200, outcome.run];
+        }
+        const attachments = /^\/api\/schedules\/([^/]+)\/attachments$/.exec(path);
+        if (attachments) {
+            only('POST');
+            const body = await this.readBody(req, MAX_ATTACHMENT_BODY_BYTES);
+            if (typeof body !== 'object' || body === null || Array.isArray(body))
+                throw new ValidationError('body: must be a JSON object');
+            return [201, await svc.addAttachment(decodeURIComponent(attachments[1]), body)];
+        }
+        const attachmentOne = /^\/api\/schedules\/([^/]+)\/attachments\/([^/]+)$/.exec(path);
+        if (attachmentOne) {
+            only('DELETE');
+            return [200, await svc.removeAttachment(decodeURIComponent(attachmentOne[1]), decodeURIComponent(attachmentOne[2]))];
         }
         const one = /^\/api\/schedules\/([^/]+)$/.exec(path);
         if (one) {

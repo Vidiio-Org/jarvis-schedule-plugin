@@ -6,7 +6,7 @@ import { BridgeClient } from '../src/bridge.js';
 import { ScheduleService } from '../src/service.js';
 import { Store } from '../src/store.js';
 import type { Config } from '../src/types.js';
-import { startFakeBridge, type FakeBridge } from './fake-bridge.mjs';
+import { startFakeBridge, type FakeBridge, type FakeBridgeOptions } from './fake-bridge.mjs';
 
 export const TOKEN = 'dashboard-token-123456';
 
@@ -40,8 +40,8 @@ export interface Harness {
 }
 
 /** A fake bridge + a data dir + a service driven by a controllable clock. */
-export async function harness(start = Date.UTC(2026, 8, 19, 10, 0, 0), configOverrides: Partial<Config> = {}): Promise<Harness> {
-  const bridge = await startFakeBridge();
+export async function harness(start = Date.UTC(2026, 8, 19, 10, 0, 0), configOverrides: Partial<Config> = {}, bridgeOptions: FakeBridgeOptions = {}): Promise<Harness> {
+  const bridge = await startFakeBridge(bridgeOptions);
   const tmp = makeTmp();
   const clock = { now: start };
   const logs: string[] = [];

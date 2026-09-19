@@ -3,4 +3,4 @@
  * contract the dashboard (ui/) is built against — do not change their shape
  * without coordinating with the ui pane.
  */
-export {};
+export const STACK_LAYERS = ['backend', 'frontend', 'mobile', 'infra', 'other'];

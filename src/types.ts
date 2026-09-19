@@ -4,6 +4,38 @@
  * without coordinating with the ui pane.
  */
 
+/** Technology stack declared for the mission — same shape as the Bridge's `ProjectStack`. */
+export interface ProjectStack {
+  backend: string[];
+  frontend: string[];
+  mobile: string[];
+  infra: string[];
+  other: string[];
+}
+
+export const STACK_LAYERS = ['backend', 'frontend', 'mobile', 'infra', 'other'] as const;
+
+/** What the API shows for a file attached to a schedule (never a path). */
+export interface AttachmentMeta {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+/** What was actually sent to the Bridge for a run (recorded for the run detail). */
+export interface RunOptions {
+  squadId: string | null;
+  maestro: string | null;
+  e2e: boolean;
+  stack: ProjectStack | null;
+  modelPool: string[];
+  agentModels: Record<string, string>;
+  attachments: Array<{ name: string; size: number }>;
+  /** Anything the plugin dropped or adjusted on purpose (e.g. models on an old Bridge). */
+  warnings: string[];
+}
+
 export interface ScheduleInput {
   name: string;
   briefing: string;
@@ -16,10 +48,20 @@ export interface ScheduleInput {
   timezone: string;
   squadId: string | null;
   enabled: boolean;
+  /** Maestro backend id (Bridge `maestros[].id`), null = the Bridge's default. */
+  maestro: string | null;
+  /** Visible E2E test flow (Bridge `e2e`). */
+  e2e: boolean;
+  stack: ProjectStack;
+  /** Model ids allowed for the mission; [] = inherit the squad's pool. */
+  modelPool: string[];
+  /** agentId -> model id overrides; {} = the squad's defaults. */
+  agentModels: Record<string, string>;
 }
 
 export interface Schedule extends ScheduleInput {
   id: string;
+  attachments: AttachmentMeta[];
   workspaceName: string | null;
   createdAt: string;
   updatedAt: string;
@@ -28,8 +70,14 @@ export interface Schedule extends ScheduleInput {
 }
 
 /** What is persisted for a schedule: the input plus bookkeeping the API hides. */
+export interface StoredAttachment extends AttachmentMeta {
+  /** File name inside the schedule's attachment directory (server-generated, never client-supplied). */
+  file: string;
+}
+
 export interface StoredSchedule extends ScheduleInput {
   id: string;
+  attachments: StoredAttachment[];
   createdAt: string;
   updatedAt: string;
   /**
@@ -69,6 +117,8 @@ export interface Run {
   error: string | null;
   summary: string | null;
   result: RunResult | null;
+  /** Options sent to the Bridge; null for runs that were never dispatched (missed) or predate this field. */
+  options: RunOptions | null;
 }
 
 /** What is persisted for a run: the API shape plus internal dedupe/tracking state. */

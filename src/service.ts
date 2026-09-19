@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
+import { AttachmentStore, type UploadInput } from './attachments.js';
 import { buildBrief } from './autonomy.js';
-import { BridgeError, type BridgeClient, type MissionDetail } from './bridge.js';
+import { BridgeError, type BridgeCatalog, type BridgeClient, type CreateMissionInput, type MissionDetail } from './bridge.js';
 import { GRACE_MS, planSlots } from './scheduler.js';
 import type { LogFn, Store } from './store.js';
 import { DAY_MS, dateString, nextSlotAfter, pad2, zonedParts } from './time.js';
@@ -9,16 +10,19 @@ import type {
   BridgeMission,
   BridgeTask,
   Config,
+  AttachmentMeta,
   Run,
+  RunOptions,
   RunResult,
   RunStatus,
   RunTask,
   Schedule,
   ScheduleInput,
+  StoredAttachment,
   StoredRun,
   StoredSchedule
 } from './types.js';
-import { parseScheduleInput, ValidationError } from './validation.js';
+import { hasDeclaredStack, parseScheduleInput, ValidationError } from './validation.js';
 
 export class NotFoundError extends Error {}
 
@@ -55,6 +59,10 @@ function cap(text: unknown): string | null {
   return text.length > RAW_TEXT_CAP ? `${text.slice(0, RAW_TEXT_CAP)}… [truncated]` : text;
 }
 
+function toMeta({ id, name, mime, size }: StoredAttachment): AttachmentMeta {
+  return { id, name, mime, size };
+}
+
 function toRun(stored: StoredRun): Run {
   const { slotKey: _s, createdAtMs: _c, inflight: _i, retryAt: _r, missingPolls: _m, ...run } = stored;
   return run;
@@ -63,6 +71,7 @@ function toRun(stored: StoredRun): Run {
 export class ScheduleService {
   private readonly cfg: Config;
   private readonly store: Store;
+  private readonly files: AttachmentStore;
   private readonly bridge: BridgeClient;
   private readonly log: LogFn;
   readonly version: string;
@@ -82,6 +91,7 @@ export class ScheduleService {
   constructor(opts: ServiceOptions) {
     this.cfg = opts.config;
     this.store = opts.store;
+    this.files = new AttachmentStore(opts.store.dataDir);
     this.bridge = opts.bridge;
     this.log = opts.log;
     this.version = opts.version;
@@ -209,6 +219,7 @@ export class ScheduleService {
       error: null,
       summary: null,
       result: null,
+      options: null,
       slotKey,
       createdAtMs: this.now(),
       inflight: false,
@@ -223,24 +234,90 @@ export class ScheduleService {
   }
 
   /**
+   * Builds the Bridge request for a schedule. The Bridge's attachment pantry is
+   * in memory and evicts old ids, so the stored files are re-uploaded on EVERY
+   * dispatch and only the fresh ids are sent. Model selection is sent only when
+   * the Bridge advertises `catalog.models` (an older Bridge would silently drop
+   * or reject it); what was dropped is recorded in `options.warnings`.
+   */
+  private async prepareMission(schedule: StoredSchedule, at: number): Promise<{ input: CreateMissionInput; options: RunOptions }> {
+    const warnings: string[] = [];
+    let modelPool: string[] = [];
+    let agentModels: Record<string, string> = {};
+    const wantsModels = schedule.modelPool.length > 0 || Object.keys(schedule.agentModels).length > 0;
+    if (wantsModels) {
+      const catalog: BridgeCatalog = await this.bridge.catalog();
+      if (catalog.models === undefined) {
+        warnings.push('The ADE Bridge does not support model selection (update Jarvis ADE): modelPool/agentModels were not sent.');
+        this.log('warn', `Schedule "${schedule.name}": Bridge has no catalog.models; model selection not sent`);
+      } else {
+        modelPool = schedule.modelPool;
+        agentModels = schedule.agentModels;
+      }
+    }
+
+    const uploaded: Array<{ id: string; name: string; size: number }> = [];
+    for (const att of schedule.attachments) {
+      const bytes = this.files.read(schedule.id, att);
+      if (bytes === null) {
+        throw new BridgeError(0, 'ATTACHMENT_MISSING', `Attachment "${att.name}" is missing from the plugin data directory; remove it and attach it again.`);
+      }
+      try {
+        const res = await this.bridge.uploadAttachment({ name: att.name, mime: att.mime, data: bytes.toString('base64') });
+        uploaded.push({ id: res.id, name: att.name, size: att.size });
+      } catch (err) {
+        if (err instanceof BridgeError) {
+          throw new BridgeError(err.status, err.code, `Could not upload attachment "${att.name}": ${err.message}`, err.neverSent, err.unavailable);
+        }
+        throw err;
+      }
+    }
+
+    const stack = hasDeclaredStack(schedule.stack) ? schedule.stack : null;
+    const input: CreateMissionInput = {
+      brief: buildBrief(schedule.briefing),
+      workspaceId: schedule.workspaceId,
+      name: this.missionName(schedule, at),
+      mode: schedule.squadId ? 'squad' : 'free',
+      ...(schedule.squadId ? { squadId: schedule.squadId } : {}),
+      ...(schedule.maestro ? { maestro: schedule.maestro } : {}),
+      ...(schedule.e2e ? { e2e: true } : {}),
+      ...(stack ? { stack } : {}),
+      ...(uploaded.length > 0 ? { attachmentIds: uploaded.map((u) => u.id) } : {}),
+      ...(modelPool.length > 0 ? { modelPool } : {}),
+      ...(Object.keys(agentModels).length > 0 ? { agentModels } : {})
+    };
+    const options: RunOptions = {
+      squadId: schedule.squadId,
+      maestro: schedule.maestro,
+      e2e: schedule.e2e,
+      stack,
+      modelPool,
+      agentModels,
+      attachments: uploaded.map((u) => ({ name: u.name, size: u.size })),
+      warnings
+    };
+    return { input, options };
+  }
+
+  /**
    * Sends the run's mission to the Bridge. `retryUntil` (scheduled runs only)
    * is the end of the grace window: a failure that provably never reached the
    * Bridge (connection refused, DNS) is retried until then; anything ambiguous
    * (timeout, HTTP error, dropped connection) is final — never risk a duplicate.
    */
   private async attempt(run: StoredRun, schedule: StoredSchedule, retryUntil: number | null): Promise<DispatchOutcome> {
-    run.inflight = true;
     run.retryAt = null;
     this.store.saveRun(run);
     const at = run.scheduledFor ? Date.parse(run.scheduledFor) : this.now();
     try {
-      const mission = await this.bridge.createMission({
-        brief: buildBrief(schedule.briefing),
-        workspaceId: schedule.workspaceId,
-        name: this.missionName(schedule, at),
-        mode: schedule.squadId ? 'squad' : 'free',
-        ...(schedule.squadId ? { squadId: schedule.squadId } : {})
-      });
+      // Everything that can fail without creating a mission (catalog probe, file uploads) happens first,
+      // while the run is not yet "in flight" — a crash here is safely retried after a restart.
+      const { input, options } = await this.prepareMission(schedule, at);
+      run.options = options;
+      run.inflight = true;
+      this.store.saveRun(run);
+      const mission = await this.bridge.createMission(input);
       run.inflight = false;
       run.status = 'running';
       run.error = null;
@@ -413,8 +490,8 @@ export class ScheduleService {
     for (const r of this.store.listRuns()) {
       if (r.scheduleId === s.id && r.dispatchedAt && (last === null || r.dispatchedAt > last)) last = r.dispatchedAt;
     }
-    const { armedAt: _armed, ...input } = s;
-    return { ...input, workspaceName: this.workspaceNames.get(s.workspaceId) ?? null, nextRunAt: next ? new Date(next.at).toISOString() : null, lastRunAt: last };
+    const { armedAt: _armed, attachments, ...input } = s;
+    return { ...input, attachments: attachments.map(toMeta), workspaceName: this.workspaceNames.get(s.workspaceId) ?? null, nextRunAt: next ? new Date(next.at).toISOString() : null, lastRunAt: last };
   }
 
   async listSchedules(): Promise<Schedule[]> {
@@ -425,7 +502,7 @@ export class ScheduleService {
   async createSchedule(body: unknown): Promise<Schedule> {
     const input = parseScheduleInput(body, this.cfg.defaultTimezone);
     const nowIso = new Date(this.now()).toISOString();
-    const stored: StoredSchedule = { ...input, id: randomUUID(), createdAt: nowIso, updatedAt: nowIso, armedAt: this.now() };
+    const stored: StoredSchedule = { ...input, attachments: [], id: randomUUID(), createdAt: nowIso, updatedAt: nowIso, armedAt: this.now() };
     this.store.saveSchedule(stored);
     await this.refreshCatalog();
     return this.toSchedule(stored);
@@ -442,6 +519,7 @@ export class ScheduleService {
       input.days.join(',') !== existing.days.join(',');
     const stored: StoredSchedule = {
       ...input,
+      attachments: existing.attachments,
       id,
       createdAt: existing.createdAt,
       updatedAt: new Date(this.now()).toISOString(),
@@ -454,6 +532,34 @@ export class ScheduleService {
 
   deleteSchedule(id: string): void {
     if (!this.store.deleteSchedule(id)) throw new NotFoundError(`Schedule "${id}" does not exist.`);
+    this.files.removeAll(id);
+  }
+
+  /** Stores a file for a schedule (JSON upload, base64). Returns the updated schedule. */
+  async addAttachment(scheduleId: string, upload: UploadInput): Promise<Schedule> {
+    const existing = this.store.getSchedule(scheduleId);
+    if (!existing) throw new NotFoundError(`Schedule "${scheduleId}" does not exist.`);
+    const attachment = this.files.save(scheduleId, upload, existing.attachments);
+    const stored: StoredSchedule = { ...existing, attachments: [...existing.attachments, attachment], updatedAt: new Date(this.now()).toISOString() };
+    this.store.saveSchedule(stored);
+    await this.refreshCatalog();
+    return this.toSchedule(stored);
+  }
+
+  async removeAttachment(scheduleId: string, attachmentId: string): Promise<Schedule> {
+    const existing = this.store.getSchedule(scheduleId);
+    if (!existing) throw new NotFoundError(`Schedule "${scheduleId}" does not exist.`);
+    const attachment = existing.attachments.find((a) => a.id === attachmentId);
+    if (!attachment) throw new NotFoundError(`Attachment "${attachmentId}" does not exist on this schedule.`);
+    const stored: StoredSchedule = {
+      ...existing,
+      attachments: existing.attachments.filter((a) => a.id !== attachmentId),
+      updatedAt: new Date(this.now()).toISOString()
+    };
+    this.store.saveSchedule(stored);
+    this.files.remove(scheduleId, attachment);
+    await this.refreshCatalog();
+    return this.toSchedule(stored);
   }
 
   /* ── runs ── */
@@ -498,11 +604,18 @@ export class ScheduleService {
     return catalog.workspaces;
   }
 
-  async squads(): Promise<Array<{ id: string; name: string }>> {
+  /** Catalog for the dashboard's form: squads (with their agents), maestros and — when the Bridge has them — models. */
+  async catalog(): Promise<{
+    available: boolean;
+    squads: BridgeCatalog['squads'];
+    maestros: BridgeCatalog['maestros'];
+    models?: BridgeCatalog['models'];
+  }> {
     try {
-      return (await this.bridge.catalog()).squads;
+      const { squads, maestros, models } = await this.bridge.catalog();
+      return { available: true, squads, maestros, ...(models ? { models } : {}) };
     } catch {
-      return [];
+      return { available: false, squads: [], maestros: [] };
     }
   }
 }

@@ -24,6 +24,8 @@ export class BridgeError extends Error {
         this.name = 'BridgeError';
     }
 }
+/** Attachments carry up to 50 MB of base64 — far more than the 10 s of a JSON call. */
+const UPLOAD_TIMEOUT_MS = 120_000;
 export class BridgeClient {
     baseUrl;
     token;
@@ -38,9 +40,9 @@ export class BridgeClient {
     redact(text) {
         return this.token ? text.split(this.token).join('***') : text;
     }
-    async request(method, path, body) {
+    async request(method, path, body, timeoutMs = this.timeoutMs) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
             let res;
             try {
@@ -56,7 +58,7 @@ export class BridgeClient {
             }
             catch (err) {
                 if (controller.signal.aborted) {
-                    throw new BridgeError(0, 'TIMEOUT', `ADE Bridge did not answer within ${this.timeoutMs}ms (${method} ${path})`, false, true);
+                    throw new BridgeError(0, 'TIMEOUT', `ADE Bridge did not answer within ${timeoutMs}ms (${method} ${path})`, false, true);
                 }
                 const cause = err.cause;
                 const neverSent = cause?.code !== undefined && NETWORK_RETRYABLE_CODES.has(cause.code);
@@ -89,10 +91,28 @@ export class BridgeClient {
     }
     async catalog() {
         const raw = await this.request('GET', '/api/catalog');
+        const list = (v) => Array.isArray(v) ? v.filter((x) => typeof x === 'object' && x !== null) : [];
+        const str = (v) => (typeof v === 'string' ? v : '');
         return {
-            workspaces: (raw.workspaces ?? []).map((w) => ({ id: w.id, name: w.name, path: w.path })),
-            squads: (raw.squads ?? []).map((s) => ({ id: s.id, name: s.name }))
+            workspaces: list(raw.workspaces).map((w) => ({ id: str(w.id), name: str(w.name), path: str(w.path) })),
+            squads: list(raw.squads).map((s) => ({
+                id: str(s.id),
+                name: str(s.name),
+                description: str(s.description),
+                agents: list(s.agents).map((a) => ({ agentId: str(a.agentId), name: str(a.name), adapter: str(a.adapter), model: str(a.model) })),
+                modelPool: Array.isArray(s.modelPool) ? s.modelPool.filter((x) => typeof x === 'string') : [],
+                agentModels: stringRecord(s.agentModels)
+            })),
+            maestros: list(raw.maestros).map((m) => ({ id: str(m.id), label: str(m.label) || str(m.id), available: m.available === true })),
+            ...(Array.isArray(raw.models)
+                ? { models: list(raw.models).map((m) => ({ id: str(m.id), label: str(m.label) || str(m.id), adapter: str(m.adapter), ...(typeof m.tier === 'string' ? { tier: m.tier } : {}), ...(typeof m.cost === 'string' ? { cost: m.cost } : {}), ...(typeof m.bestFor === 'string' ? { bestFor: m.bestFor } : {}) })) }
+                : {})
         };
+    }
+    /** `POST /api/attachments` — stages bytes in the Bridge's (evicting) pantry and returns a fresh opaque id. */
+    async uploadAttachment(input) {
+        const raw = await this.request('POST', '/api/attachments', input, UPLOAD_TIMEOUT_MS);
+        return raw.attachment;
     }
     listMissions() {
         return this.request('GET', '/api/missions');
@@ -172,6 +192,15 @@ export class BridgeClient {
             controller?.abort();
         };
     }
+}
+function stringRecord(v) {
+    const out = {};
+    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+        for (const [k, val] of Object.entries(v))
+            if (typeof val === 'string')
+                out[k] = val;
+    }
+    return out;
 }
 function parseEnvelope(text) {
     try {

@@ -2,9 +2,15 @@ export interface FakeBridgeOptions {
   port?: number;
   token?: string;
   workspaces?: Array<{ id: string; name: string; path: string }>;
-  squads?: Array<{ id: string; name: string; description?: string; agents?: unknown[] }>;
+  squads?: Array<{ id: string; name: string; description?: string; agents?: unknown[]; modelPool?: string[]; agentModels?: Record<string, string> }>;
   /** Finish every created mission automatically after this many ms. */
   autoFinishMs?: number;
+  /** Emulate an old Bridge: no `models` in the catalog, modelPool/agentModels ignored. */
+  legacy?: boolean;
+  models?: Array<{ id: string; label: string; adapter: string; tier?: string; cost?: string }>;
+  maestros?: Array<{ id: string; label: string; available: boolean }>;
+  /** Attachment pantry capacity before the oldest id is evicted (default 500). */
+  attachmentRegistryMax?: number;
 }
 
 export interface FakeRequest {
@@ -22,6 +28,8 @@ export interface FakeBridge {
   missions: any[];
   requests: FakeRequest[];
   createRequests: FakeRequest[];
+  uploadRequests: FakeRequest[];
+  attachments: Array<{ id: string; name: string; mime: string; size: number; data: string }>;
   finishMission(
     id: string,
     opts?: {

@@ -73,7 +73,12 @@ describe('parseScheduleInput', () => {
       days: [0, 1, 2, 3, 4, 5, 6],
       timezone: 'America/Sao_Paulo',
       squadId: null,
-      enabled: true
+      enabled: true,
+      maestro: null,
+      e2e: false,
+      stack: { backend: [], frontend: [], mobile: [], infra: [], other: [] },
+      modelPool: [],
+      agentModels: {}
     });
   });
 

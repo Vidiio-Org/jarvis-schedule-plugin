@@ -6,7 +6,7 @@
  * `mission:update` with the Mission object FLAT.
  */
 
-import type { BridgeMission, BridgeTask } from './types.js';
+import type { BridgeMission, BridgeTask, ProjectStack } from './types.js';
 
 const NETWORK_RETRYABLE_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN']);
 
@@ -25,9 +25,44 @@ export class BridgeError extends Error {
   }
 }
 
+export interface BridgeAgent {
+  agentId: string;
+  name: string;
+  adapter: string;
+  model: string;
+}
+
+export interface BridgeSquad {
+  id: string;
+  name: string;
+  description: string;
+  agents: BridgeAgent[];
+  /** Squad-level defaults (newer Bridges): allowed models ([] = unrestricted) and per-agent model. */
+  modelPool: string[];
+  agentModels: Record<string, string>;
+}
+
+export interface BridgeMaestro {
+  id: string;
+  label: string;
+  available: boolean;
+}
+
+export interface BridgeModel {
+  id: string;
+  label: string;
+  adapter: string;
+  tier?: string;
+  cost?: string;
+  bestFor?: string;
+}
+
 export interface BridgeCatalog {
   workspaces: Array<{ id: string; name: string; path: string }>;
-  squads: Array<{ id: string; name: string }>;
+  squads: BridgeSquad[];
+  maestros: BridgeMaestro[];
+  /** Absent on a Bridge that predates model selection (`undefined`, not `[]`). */
+  models?: BridgeModel[];
 }
 
 export interface CreateMissionInput {
@@ -36,7 +71,24 @@ export interface CreateMissionInput {
   name: string;
   mode: 'free' | 'squad';
   squadId?: string;
+  maestro?: string;
+  e2e?: boolean;
+  stack?: ProjectStack;
+  attachmentIds?: string[];
+  /** Only sent when the Bridge advertises `catalog.models`. */
+  modelPool?: string[];
+  agentModels?: Record<string, string>;
 }
+
+export interface UploadedAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+/** Attachments carry up to 50 MB of base64 — far more than the 10 s of a JSON call. */
+const UPLOAD_TIMEOUT_MS = 120_000;
 
 export interface MissionDetail {
   mission: BridgeMission;
@@ -74,9 +126,9 @@ export class BridgeClient {
     return this.token ? text.split(this.token).join('***') : text;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(method: string, path: string, body?: unknown, timeoutMs = this.timeoutMs): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       let res: Response;
       try {
@@ -91,7 +143,7 @@ export class BridgeClient {
         });
       } catch (err) {
         if (controller.signal.aborted) {
-          throw new BridgeError(0, 'TIMEOUT', `ADE Bridge did not answer within ${this.timeoutMs}ms (${method} ${path})`, false, true);
+          throw new BridgeError(0, 'TIMEOUT', `ADE Bridge did not answer within ${timeoutMs}ms (${method} ${path})`, false, true);
         }
         const cause = (err as { cause?: { code?: string } }).cause;
         const neverSent = cause?.code !== undefined && NETWORK_RETRYABLE_CODES.has(cause.code);
@@ -132,11 +184,31 @@ export class BridgeClient {
   }
 
   async catalog(): Promise<BridgeCatalog> {
-    const raw = await this.request<Partial<BridgeCatalog>>('GET', '/api/catalog');
+    const raw = await this.request<Record<string, unknown>>('GET', '/api/catalog');
+    const list = (v: unknown): Array<Record<string, unknown>> =>
+      Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null) : [];
+    const str = (v: unknown): string => (typeof v === 'string' ? v : '');
     return {
-      workspaces: (raw.workspaces ?? []).map((w) => ({ id: w.id, name: w.name, path: w.path })),
-      squads: (raw.squads ?? []).map((s) => ({ id: s.id, name: s.name }))
+      workspaces: list(raw.workspaces).map((w) => ({ id: str(w.id), name: str(w.name), path: str(w.path) })),
+      squads: list(raw.squads).map((s) => ({
+        id: str(s.id),
+        name: str(s.name),
+        description: str(s.description),
+        agents: list(s.agents).map((a) => ({ agentId: str(a.agentId), name: str(a.name), adapter: str(a.adapter), model: str(a.model) })),
+        modelPool: Array.isArray(s.modelPool) ? s.modelPool.filter((x): x is string => typeof x === 'string') : [],
+        agentModels: stringRecord(s.agentModels)
+      })),
+      maestros: list(raw.maestros).map((m) => ({ id: str(m.id), label: str(m.label) || str(m.id), available: m.available === true })),
+      ...(Array.isArray(raw.models)
+        ? { models: list(raw.models).map((m) => ({ id: str(m.id), label: str(m.label) || str(m.id), adapter: str(m.adapter), ...(typeof m.tier === 'string' ? { tier: m.tier } : {}), ...(typeof m.cost === 'string' ? { cost: m.cost } : {}), ...(typeof m.bestFor === 'string' ? { bestFor: m.bestFor } : {}) })) }
+        : {})
     };
+  }
+
+  /** `POST /api/attachments` — stages bytes in the Bridge's (evicting) pantry and returns a fresh opaque id. */
+  async uploadAttachment(input: { name: string; mime: string; data: string }): Promise<UploadedAttachment> {
+    const raw = await this.request<{ attachment: UploadedAttachment }>('POST', '/api/attachments', input, UPLOAD_TIMEOUT_MS);
+    return raw.attachment;
   }
 
   listMissions(): Promise<{ missions: BridgeMission[]; tasks: BridgeTask[] }> {
@@ -218,6 +290,14 @@ export class BridgeClient {
       controller?.abort();
     };
   }
+}
+
+function stringRecord(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+    for (const [k, val] of Object.entries(v)) if (typeof val === 'string') out[k] = val;
+  }
+  return out;
 }
 
 interface Envelope {

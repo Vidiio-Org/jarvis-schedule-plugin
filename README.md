@@ -2,7 +2,7 @@
 
 Plugin do [Jarvis ADE](https://jarvisade.com) que **dispara missões recorrentes**. Você cadastra um agendamento (briefing + workspace + horário + dias da semana + fuso + squad opcional) e, no horário combinado, o plugin abre uma missão no workspace escolhido, com o briefing e um reforço fixo para o maestro trabalhar **100% sem supervisão**. Cada disparo fica registrado em um histórico, junto com o resumo e os dados que o maestro devolveu.
 
-O plugin traz o seu próprio **painel web local** (agendamentos, histórico e detalhe de cada disparo), servido só em `127.0.0.1`.
+No Jarvis ADE 0.4.0 ou superior ele **abre dentro do próprio app**: um ícone **Agendamentos** aparece na barra lateral, sem token, sem senha e sem configurar a Bridge. O plugin traz o seu próprio painel (agendamentos, histórico e detalhe de cada disparo), servido só em `127.0.0.1`.
 
 ## O que ele faz
 
@@ -14,60 +14,70 @@ O plugin traz o seu próprio **painel web local** (agendamentos, histórico e de
 
 ## Requisitos
 
-- Jarvis ADE aberto (o plugin fala com a **ADE SaaS Bridge**, o servidor local do ADE, por padrão em `http://127.0.0.1:4820`).
+- **Jarvis ADE 0.4.0 ou superior** (caminho integrado, sem configuração). Um ADE mais antigo também funciona, mas exige passos manuais: veja [ADE mais antigo (sem integração automática)](#ade-mais-antigo-sem-integração-automática).
 - Node.js 22 ou superior disponível no `PATH` (o ADE inicia o plugin com `node`).
 - Nada de `npm install`: o plugin não tem dependências em tempo de execução e o `dist/` já vem compilado.
 
 ## Instalação
 
-No ADE, abra **Marketplace de Plugins → Instalados → Importar plugin**, escolha a origem **URL git** e informe:
+1. No ADE, abra o **Marketplace de Plugins**, encontre **Jarvis Schedule** e instale. (Enquanto a listagem não estiver aprovada, importe pela origem git: **Marketplace de Plugins → Instalados → Importar plugin → URL git**, com `https://github.com/Vidiio-Org/jarvis-schedule-plugin`.)
+2. Pronto. Um ícone **Agendamentos** aparece na barra lateral do ADE, ao lado do ícone de Plugins. Clique nele e o painel abre **dentro do app**.
 
-```
-https://github.com/Vidiio-Org/jarvis-schedule-plugin
-```
+Não há nada para preencher. O ADE inicia a Bridge local sozinho quando o plugin precisa dela e entrega o endereço e o token ao plugin, e ele mesmo autentica o painel: você não digita token nenhum nem mexe nas configurações. No topo do painel aparece **Conectado à Bridge do ADE (automático)**.
 
-Depois de importar, abra as configurações do plugin, preencha a configuração obrigatória `bridgeToken` (o `dashboardToken` é opcional, veja abaixo) e salve. Ao salvar, o ADE reinicia o plugin. Se alguma configuração obrigatória estiver vazia, a integração fica em `missing_settings` e não inicia.
+Se a integração não estiver em execução (desativada ou com erro), a tela mostra o estado e um atalho para as configurações. Quando o plugin reinicia, o ADE recarrega a tela; se ela mostrar "A sessão do painel expirou", use **Recarregar**. Se o ADE reiniciar a Bridge ou trocar o token dela, o plugin adota as novas credenciais na hora, sem reiniciar nem perder agendamentos.
 
 ## Configurações
 
-| Chave | Tipo | Obrigatória | Padrão | O que faz |
-| --- | --- | --- | --- | --- |
-| `bridgeUrl` | texto | não | `http://127.0.0.1:4820` | Endereço da ADE SaaS Bridge. Só mude se você iniciou o ADE com outra porta (`ADE_BRIDGE_PORT`). |
-| `bridgeToken` | segredo | **sim** | — | Token da Bridge. Veja [Onde achar o token da Bridge](#onde-achar-o-token-da-bridge). |
-| `dashboardPort` | número | não | `4870` | Porta do painel (sempre em `127.0.0.1`). |
-| `dashboardToken` | segredo | não | — | Senha para abrir o painel **num navegador comum**, com **pelo menos 12 caracteres** (se preenchido com menos que isso, o plugin se recusa a iniciar). Dentro do ADE não é preciso: a tela Agendamentos entra sozinha. |
-| `defaultTimezone` | texto | não | `America/Sao_Paulo` | Fuso IANA sugerido para novos agendamentos. Se for inválido, o plugin usa `America/Sao_Paulo` e avisa no log. |
-| `historyRetentionDays` | número | não | `90` | Quantos dias de histórico manter (mínimo 1, máximo 3650). Registros mais antigos são apagados. |
-| `enabled` | booleano | não | `true` | Chave geral. Desligada, **nenhum agendamento dispara sozinho** (o painel continua no ar e "Executar agora" continua funcionando). |
+Todas são opcionais. Num ADE 0.4.0 ou superior você não precisa mexer em nenhuma.
 
-### Onde achar o token da Bridge
-
-O ADE define o token da Bridge de duas formas:
-
-- se você iniciou o ADE com a variável `ADE_BRIDGE_TOKEN`, é esse valor;
-- caso contrário o ADE gera um token aleatório e o imprime **uma vez** no log do aplicativo, na linha `[saas-bridge] token=... port=...`.
-
-Trate o token como uma credencial de acesso à máquina que roda o ADE.
+| Chave | Tipo | Padrão | O que faz |
+| --- | --- | --- | --- |
+| `bridgeUrl` | texto | `http://127.0.0.1:4820` | **Só para ADE mais antigo.** Endereço da ADE SaaS Bridge. É ignorada quando o ADE entrega a Bridge automaticamente. |
+| `bridgeToken` | segredo | — | **Só para ADE mais antigo.** Token da Bridge. É ignorado quando o ADE entrega a Bridge automaticamente. Veja [ADE mais antigo](#ade-mais-antigo-sem-integração-automática). |
+| `dashboardPort` | número | `4870` | Porta do painel (sempre em `127.0.0.1`). |
+| `dashboardToken` | segredo | — | Senha para abrir o painel **num navegador comum**, com **pelo menos 12 caracteres** (se preenchido com menos que isso, o plugin se recusa a iniciar). Dentro do ADE não é preciso: a tela Agendamentos entra sozinha. |
+| `defaultTimezone` | texto | `America/Sao_Paulo` | Fuso IANA sugerido para novos agendamentos. Se for inválido, o plugin usa `America/Sao_Paulo` e avisa no log. |
+| `historyRetentionDays` | número | `90` | Quantos dias de histórico manter (mínimo 1, máximo 3650). Registros mais antigos são apagados. |
+| `enabled` | booleano | `true` | Chave geral. Desligada, **nenhum agendamento dispara sozinho** (o painel continua no ar e "Executar agora" continua funcionando). |
 
 ## Como abrir o painel
 
 ### Dentro do ADE (recomendado)
 
-No ADE mais recente (0.4.0 ou superior, com suporte a telas de plugin), com o plugin instalado, ativado e a integração em execução, clique no ícone **Agendamentos** na barra de trabalho (ao lado do ícone de Plugins). O painel abre como uma tela nativa do ADE, **sem login e sem digitar token**: o ADE autentica as chamadas por conta própria com um token que existe só naquela execução do plugin. Se a integração não estiver em execução (desativada, configuração faltando ou com erro), a tela mostra o estado e um atalho para as configurações. Quando o plugin reinicia, o ADE recarrega a tela; se ela mostrar "A sessão do painel expirou", use **Recarregar**.
+Com o plugin instalado e a integração em execução, clique no ícone **Agendamentos** na barra lateral. O painel abre como uma tela nativa do ADE, **sem login e sem digitar token**: o ADE autentica as chamadas por conta própria com um token que existe só naquela execução do plugin.
 
-Nessa tela o painel não repete o título "Jarvis Agendador" nem mostra o botão **Sair**; a conexão com a Bridge continua visível no topo.
+Nessa tela o painel não repete o título "Jarvis Agendador" nem mostra o botão **Sair**; o estado da conexão com a Bridge continua visível no topo.
 
-### Num navegador (ADE mais antigo, ou se você preferir)
+### Num navegador (opcional)
 
-Um ADE sem telas de plugin instala o plugin normalmente, mas ignora o ícone **Agendamentos**. Nesse caso, ou para usar o painel fora do ADE, acesse:
+Para usar o painel fora do ADE, acesse:
 
 ```
 http://127.0.0.1:<dashboardPort>
 ```
 
-Com a porta padrão, `http://127.0.0.1:4870`. Na tela de login, digite o valor de `dashboardToken`. **Sem `dashboardToken` configurado** (e num ADE que não autentica a tela), o plugin gera uma senha nova a cada execução e a escreve no log da integração, na linha `Painel: http://127.0.0.1:<porta>/ — token <senha>`; copie o endereço e a senha dali. Esse log fica só no seu computador. O token fica só no `sessionStorage` do navegador (some ao fechar a aba) e é enviado como `Authorization: Bearer` em cada chamada. Se ele for recusado, o painel volta para o login com a mensagem "Token inválido ou expirado. Entre novamente."
+Com a porta padrão, `http://127.0.0.1:4870`. Na tela de login, digite o valor de `dashboardToken`. O token fica só no `sessionStorage` do navegador (some ao fechar a aba) e é enviado como `Authorization: Bearer` em cada chamada. Se ele for recusado, o painel volta para o login com a mensagem "Token inválido ou expirado. Entre novamente."
 
-O painel se chama "Jarvis Agendador" na tela. No topo aparece se a Bridge está **conectada** ou **desconectada**.
+Sem `dashboardToken` configurado e num ADE que não autentica a tela (o ADE mais antigo), o plugin gera uma senha nova a cada execução e a escreve no log da integração, na linha `Painel: http://127.0.0.1:<porta>/ — token <senha>`; copie o endereço e a senha dali. Esse log fica só no seu computador.
+
+No navegador o painel se chama "Jarvis Agendador" e o topo mostra se a Bridge está **conectada** (automática ou manual) ou **desconectada**.
+
+## ADE mais antigo (sem integração automática)
+
+Isto vale **só** para um ADE anterior à versão 0.4.0. Nele o plugin instala normalmente, mas:
+
+- o ADE **ignora o ícone Agendamentos** (não há telas de plugin): o painel só abre no navegador;
+- o ADE **não inicia a Bridge para o plugin**: você precisa ligá-la e informar o token manualmente.
+
+Passos:
+
+1. **Inicie o ADE com a Bridge ligada**: defina `ADE_BRIDGE=1` no ambiente do aplicativo (não existe opção na interface). Opcionalmente `ADE_BRIDGE_PORT` (padrão `4820`) e `ADE_BRIDGE_TOKEN`. **Sem `ADE_BRIDGE=1` a Bridge não existe** e o painel só mostra **Bridge desconectado**.
+2. **Pegue o token da Bridge.** Se você definiu `ADE_BRIDGE_TOKEN`, é esse valor; senão o ADE gera um token aleatório e o imprime **uma vez** no log do aplicativo, na linha `[saas-bridge] token=... port=...`. Trate-o como uma credencial de acesso à máquina que roda o ADE.
+3. Nas configurações do plugin preencha **`bridgeToken`** (e `bridgeUrl`, só se a porta não for a `4820`) e salve. Ao salvar, o ADE reinicia o plugin. Sem `bridgeToken` (e sem Bridge entregue pelo ADE) a integração não inicia.
+4. **Abra o painel no navegador**, em `http://127.0.0.1:<dashboardPort>`, com o `dashboardToken` que você definiu nas configurações; se não definiu nenhum, use a senha gerada a cada execução, na linha `Painel: … — token …` do log da integração (veja acima).
+
+O plugin usa a Bridge entregue pelo ADE sempre que ela existir; `bridgeUrl` e `bridgeToken` só valem quando ela não vem.
 
 ## Criando um agendamento
 
@@ -155,22 +165,24 @@ O plugin acompanha cada missão pelo fluxo de eventos da Bridge (SSE) e, como re
 
 ## Segurança
 
-- **Este plugin inicia missões reais, que executam código na máquina onde o ADE roda.** Quem acessa o painel consegue disparar missões. Por isso o acesso pelo navegador exige um token: se você configurar o `dashboardToken`, use no mínimo 12 caracteres, de preferência um valor longo e único. Dentro do ADE o acesso é autenticado pelo próprio ADE (token por execução, nunca visível na tela nem na URL).
+- **Este plugin inicia missões reais, que executam código na máquina onde o ADE roda.** Quem acessa o painel consegue disparar missões. Por isso o acesso pelo navegador exige um token: se você configurar o `dashboardToken`, use no mínimo 12 caracteres, de preferência um valor longo e único. Dentro do ADE o acesso é autenticado pelo próprio ADE (token por execução, nunca visível na tela nem na URL), e a Bridge é iniciada pelo ADE só em `127.0.0.1`, com o token entregue direto ao plugin.
 - O painel só escuta em `127.0.0.1`. Não o exponha a outras máquinas nem à internet (túnel, proxy reverso).
 - Toda rota `/api/*` exige um token: o `dashboardToken` ou o token da execução que o ADE envia (comparação em tempo constante). Requisições com cabeçalho `Host` que não seja local (`127.0.0.1`, `localhost`, `[::1]`) são recusadas com `403 FORBIDDEN_HOST`, o que barra ataques de DNS rebinding. Não há CORS.
 - O painel envia `Content-Security-Policy` (incluindo `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff` e `Cache-Control: no-store`. Não carrega nada de fora: sem CDN, sem fontes externas, sem frameworks.
 - Textos vindos da API e das missões são sempre exibidos como texto, nunca como HTML.
-- Os tokens (`bridgeToken`, `dashboardToken` e o token do ADE) não são gravados em log. Única exceção, de propósito: sem nenhum `dashboardToken` e num ADE sem telas de plugin, a senha gerada a cada execução aparece no log local da integração (linha `Painel: …`), para você conseguir abrir o painel.
+- Os tokens (o da Bridge, seja o entregue pelo ADE ou o `bridgeToken`, o `dashboardToken` e o token do ADE) não são gravados em log nem guardados em disco pelo plugin. Única exceção, de propósito: sem nenhum `dashboardToken` e num ADE sem telas de plugin, a senha gerada a cada execução aparece no log local da integração (linha `Painel: …`), para você conseguir abrir o painel.
 - O histórico guarda o resumo e os dados da missão em `ADE_PLUGIN_DATA_DIR`, no seu computador. O briefing é enviado só à Bridge local.
 
 ## Solução de problemas
 
 | Sintoma | O que verificar |
 | --- | --- |
-| Integração em `missing_settings` | Preencha `bridgeToken` e salve. |
+| Painel mostra **Bridge desconectado** (ADE 0.4.0+) | Reabra o ADE ou reinicie o plugin (Plugins → integração). O ADE entrega a Bridge sozinho; se ela caiu, o plugin volta a conectar assim que o ADE a reiniciar. |
+| Painel mostra **Bridge desconectado** (ADE mais antigo) | O ADE foi iniciado com `ADE_BRIDGE=1`? Sem essa variável a Bridge não existe. A `bridgeUrl` bate com a porta real (padrão 4820, ou `ADE_BRIDGE_PORT`)? |
+| Integração com erro e log "Missing required setting "bridgeToken"" | Só acontece num ADE que não entrega a Bridge (mais antigo): inicie-o com `ADE_BRIDGE=1`, preencha `bridgeToken` e salve. |
+| Login funciona mas a Bridge recusa (nos logs, erros 401) | Só no ADE mais antigo: o `bridgeToken` está errado. Confira o valor de `ADE_BRIDGE_TOKEN` ou a linha `[saas-bridge] token=...` do log do ADE. |
+| O ícone **Agendamentos** não aparece | O ADE é anterior à 0.4.0 (sem telas de plugin): atualize, ou abra o painel no navegador. |
 | Log "Configuration invalid" com `dashboardToken` | O token, se preenchido, precisa de pelo menos 12 caracteres (ou deixe em branco). |
-| Painel mostra **Bridge desconectado** | O ADE está aberto? A `bridgeUrl` bate com a porta real da Bridge (padrão 4820, ou `ADE_BRIDGE_PORT`)? |
-| Login funciona mas a Bridge recusa (nos logs, erros 401) | O `bridgeToken` está errado. Confira o valor de `ADE_BRIDGE_TOKEN` ou a linha `[saas-bridge] token=...` do log do ADE. |
 | O plugin não sobe: porta em uso | Outra aplicação usa a `dashboardPort`. Escolha outra porta e salve. |
 | Lista de workspaces ou squads vazia no formulário | A Bridge não respondeu. O formulário continua utilizável; reabra depois que a Bridge voltar. |
 | "Executar agora" retorna erro de Bridge indisponível | Mesmo caso: a Bridge está fora do ar. O disparo é registrado como "Falha no disparo". |
@@ -198,7 +210,7 @@ Os testes cobrem o cálculo de horários (incluindo horário de verão), o agend
 ### Estrutura
 
 ```
-ade.plugin.json     manifesto do plugin (configurações + integração "scheduler")
+ade.plugin.json     manifesto do plugin (configurações, tela "Agendamentos" + integração "scheduler" com bridge: true)
 dist/               sidecar compilado (node dist/index.js), versionado
 src/                fonte em TypeScript
 ui/                 painel (HTML/JS/CSS puros, sem build)
@@ -213,7 +225,7 @@ O estado (agendamentos e histórico) fica em `ADE_PLUGIN_DATA_DIR`: `schedules.j
 
 Servida em `127.0.0.1:<dashboardPort>`. Todas as rotas `/api/*` exigem `Authorization: Bearer <dashboardToken>` e respondem `{ok:true,data}` ou `{ok:false,code,message}`.
 
-`GET /api/health` · `GET /api/workspaces` · `GET /api/catalog` (squads com agentes, maestros e, quando o Bridge tem, `models`) · `GET|POST /api/schedules` · `PUT|DELETE /api/schedules/:id` · `POST /api/schedules/:id/run` · `POST /api/schedules/:id/attachments` (JSON `{name, mime, data}` com `data` em base64) · `DELETE /api/schedules/:id/attachments/:attachmentId` · `GET /api/runs?scheduleId=&limit=` · `GET /api/runs/:id`
+`GET /api/health` (inclui `bridgeConnected` e `bridgeSource`: `host` = Bridge entregue pelo ADE, `settings` = configurada à mão) · `GET /api/workspaces` · `GET /api/catalog` (squads com agentes, maestros e, quando o Bridge tem, `models`) · `GET|POST /api/schedules` · `PUT|DELETE /api/schedules/:id` · `POST /api/schedules/:id/run` · `POST /api/schedules/:id/attachments` (JSON `{name, mime, data}` com `data` em base64) · `DELETE /api/schedules/:id/attachments/:attachmentId` · `GET /api/runs?scheduleId=&limit=` · `GET /api/runs/:id`
 
 **Validação contra o Bridge.** Ao criar ou editar (`POST`/`PUT /api/schedules`), com o Bridge acessível, o plugin confere `workspaceId`, `squadId`, `maestro`, `modelPool` e `agentModels` no `GET /api/catalog` do Bridge. Um valor que o Bridge não conhece resulta em `400 VALIDATION_ERROR` com o campo na mensagem (`workspaceId: unknown workspace "x"…`): o `maestro` precisa estar em `catalog.maestros`, cada id de `modelPool` e cada modelo de `agentModels` em `catalog.models`, e cada agente de `agentModels` precisa existir no squad escolhido (o que exige um `squadId`). O fornecedor do agente **não** é comparado com o do modelo.
 
@@ -227,7 +239,7 @@ Códigos de erro: `UNAUTHORIZED` (401), `VALIDATION_ERROR` (400), `NOT_FOUND` (4
 
 **Jarvis Schedule** is a Jarvis ADE plugin that dispatches recurring, fully autonomous missions. Define a schedule (briefing, workspace, `HH:MM`, days of the week, IANA timezone, optional squad) and the plugin creates a mission through the local ADE SaaS Bridge at that time: your briefing verbatim, followed by a fixed block telling the maestro never to call `ask_user` and to close with a complete `mission_finish` summary. Every dispatch is recorded with its status, the maestro's summary, task results and cost.
 
-- Local dashboard at `http://127.0.0.1:<dashboardPort>` (default 4870), bound to loopback only. Inside ADE 0.4.0+ it opens as a native screen (`contributes.views`, icon **Agendamentos**) with no login: the host proxy injects a per-launch token it hands the sidecar in `hello.host.viewToken`, and the sidecar announces its real port in `ready.http.port`. In a browser it is protected by the optional `dashboardToken` (≥ 12 characters); with neither, a random per-launch token is written to the local integration log (`Painel: <url> — token <t>`).
+- Local dashboard at `http://127.0.0.1:<dashboardPort>` (default 4870), bound to loopback only. Inside ADE 0.4.0+ it opens as a native screen (`contributes.views`, icon **Agendamentos**) with no login: the host proxy injects a per-launch token it hands the sidecar in `hello.host.viewToken`, and the sidecar announces its real port in `ready.http.port`. The manifest declares `"bridge": true` on the integration, so ADE 0.4.0+ starts the Bridge on demand (loopback) and passes `hello.host.bridge = {url, token}`: no manual Bridge setup, and a repeated `hello` with new credentials is adopted live. Older ADE needs `ADE_BRIDGE=1` plus the `bridgeUrl`/`bridgeToken` settings. In a browser it is protected by the optional `dashboardToken` (≥ 12 characters); with neither, a random per-launch token is written to the local integration log (`Painel: <url> — token <t>`).
 - Late slots are dispatched up to 15 minutes after the scheduled time; older ones are recorded as `missed`. A write-ahead run ledger in `ADE_PLUGIN_DATA_DIR` guarantees a restart never dispatches the same slot twice.
 - On create/update the plugin validates workspace, squad, maestro and models against the Bridge catalog (400 `VALIDATION_ERROR` naming the field). With the Bridge down the schedule is accepted and the response carries a `warnings` array. Models are never checked against the agent's adapter — the model implies the CLI.
 - Runtime is dependency-free (Node ≥ 22, built-ins and global `fetch`); `dist/` is committed. See [Desenvolvimento](#desenvolvimento) for build and test commands.
